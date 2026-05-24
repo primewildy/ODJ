@@ -1,0 +1,7 @@
+[package]
+name = "control"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+rtrb = { workspace = true }

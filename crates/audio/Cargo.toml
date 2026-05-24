@@ -1,0 +1,10 @@
+[package]
+name = "audio"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+control = { path = "../control" }
+cpal = { workspace = true }
+rustfft = { workspace = true }
+anyhow = { workspace = true }

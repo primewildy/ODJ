@@ -1,0 +1,9 @@
+[package]
+name = "decode"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+control = { path = "../control" }
+symphonia = { workspace = true }
+anyhow = { workspace = true }

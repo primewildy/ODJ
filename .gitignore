@@ -1,0 +1,18 @@
+# Build artifacts
+target/
+**/target/
+
+# Throwaway latency spike (not committed)
+spike/
+
+# Local music library (large, not source)
+music/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Rust
+Cargo.lock.bak

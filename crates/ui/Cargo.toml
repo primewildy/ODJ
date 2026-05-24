@@ -1,0 +1,13 @@
+[package]
+name = "ui"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+audio = { path = "../audio" }
+decode = { path = "../decode" }
+control = { path = "../control" }
+analysis = { path = "../analysis" }
+eframe = { workspace = true }
+egui_extras = { workspace = true }
+anyhow = { workspace = true }
