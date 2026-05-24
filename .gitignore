@@ -8,6 +8,9 @@ spike/
 # Local music library (large, not source)
 music/
 
+# Pico firmware build output
+hardware/firmware/build/
+
 # Editor / OS
 .idea/
 .vscode/

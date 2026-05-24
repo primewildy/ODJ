@@ -88,12 +88,42 @@ priority order within each section.
   custom controller will be MSB+LSB pairs (CC m, CC m+32). Currently we
   only treat single CCs. Engine takes `f32` directly so only the parse
   side needs the work.
-- [ ] **Relative-CC jog wheel handling.** Custom encoders will emit
-  value 0x40 ± delta. Map to a magnitude-aware `SetNudge` (faster spin
-  → larger temporary offset) or a `Seek` for paused decks.
+- [ ] **Relative-CC jog wheel handling.** The firmware (`hardware/firmware/`)
+  emits CC 16 with value `64 ± delta` per scan tick. Host side needs:
+  - Translate each CC 16 message into a `SetNudge { delta * scale }`
+    proportional to spin speed.
+  - A 50–100 ms timer that clears the nudge back to 0 when CC 16
+    stops arriving (deck returns to set tempo when you let go of the
+    jog).
 - [ ] **TOML mapping file** instead of the hardcoded LPD8 layout. The
   v1 plan had a schema sketch — pick that up so different controllers
-  can be added without code changes.
+  can be added without code changes. Becomes more urgent as the hardware
+  controller starts adding controls.
+- [ ] **EQ-mid in the engine.** The custom hardware has a 3-band EQ
+  (low/mid/high) but the engine only has 2-band shelves. Add a mid
+  peak filter (~1 kHz) and a `SetEqMid` command.
+
+## Hardware build (this branch)
+
+See [`hardware/`](./hardware/) and the [`hardware-prototype`] branch.
+
+- [x] Pico SDK firmware (encoder + buttons + mux ADC → USB MIDI).
+- [x] Schematic + build/flash docs.
+- [ ] **Assemble and bring up Deck A side.** Wire the encoder first
+  per `hardware/SCHEMATIC.md` § "Build order", verify with
+  `aseqdump`, then add buttons → mux + pots → faders.
+- [ ] **PIO quadrature decoder.** Polled decoder is plenty fast for
+  the 600 P/R encoder at human spin rates, but a PIO program would
+  free the CPU and survive higher RPMs. Pico SDK has a reference
+  example.
+- [ ] **Capacitive jog touch** sensor on the platter top (cap-touch
+  module or RC charge-time measurement). Required for proper scratch
+  detection later.
+- [ ] **74HC165 button expansion** when we add the full performance
+  pad grid (>15 buttons).
+- [ ] **LED feedback to the device.** Currently MIDI is one-way
+  (controller → host). Add a host MIDI output thread that mirrors
+  deck state (playing, cue armed, sync, EQ kill) to LEDs.
 
 ## Audio routing
 
