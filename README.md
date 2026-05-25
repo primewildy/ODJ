@@ -16,18 +16,28 @@ tracks.
 
 Built features:
 - Two decks, cpal/PipeWire output at 128-frame buffers (~2.9 ms latency).
+- Optional second cpal stream for **PFL / cue monitoring** on a separate
+  output device (headphones).
 - Symphonia-based decode (mp3, flac, wav, aac/m4a).
-- Phase-vocoder key-lock + vinyl-style coupled-pitch modes per deck.
+- Phase-vocoder key-lock (with identity phase-locking for cleaner highs)
+  + vinyl-style coupled-pitch mode per deck.
 - 2-band shelving EQ per deck (low ≈250 Hz, high ≈4 kHz, ±25..+6 dB).
+- Per-deck play-envelope (5 ms fade) — no click on transitions.
 - BPM + beat-grid analysis (pure-Rust spectral flux + autocorr + brute
   force phase-aligned refinement, ~0.05 BPM precision).
 - Musical key detection (Krumhansl-Schmuckler) in Camelot notation.
 - Auto Sync (BPM match) + auto Beat Align (phase-snap on play start).
 - Pioneer-style CUE state machine including the "Cue Play" commit.
-- Vinyl-style temporary push/pull nudge on pads (while held).
+- Vinyl-style temporary push/pull nudge while held.
+- Paused jog = audible scrub (forward + reverse). Click-to-seek on
+  either waveform.
 - Sortable track list (Title / Artist / Key / BPM), favourites, harmonic
   compatibility filter, background analysis worker with disk persistence.
 - LPD8 hardcoded mapping (pads + 8 knobs) with on-screen mirroring.
+- **Homebrew hardware controller** prototype under `hardware/` — RP2040
+  + optical encoder + arcade buttons + 74HC4051 analog mux. Class-
+  compliant USB MIDI; sysex-triggered reboot for one-command re-flash
+  (`hardware/flash.sh`).
 
 See [DESIGN.md](./DESIGN.md) for architecture and [TODO.md](./TODO.md) for
 roadmap.
@@ -35,16 +45,23 @@ roadmap.
 ## Running
 
 ```
-cargo run --release -- [--device <pipewire-node>] [--midi <port-substring>] \
-                      [--music-dir <path>]
+cargo run --release -- [--device <cpal-name>] [--cue-device <cpal-name>] \
+                      [--midi <port-substring>] [--music-dir <path>]
 ```
 
 Defaults:
-- `--device` unset → uses the cpal `pipewire` device. Override to bypass a
-  custom default-sink filter (e.g. a mono-summing loopback). Sets
-  `PIPEWIRE_NODE` for this process only; does not modify global state.
+- `--device` unset → uses the cpal `pipewire` device for the master out.
+  Override to target a specific sink directly (e.g. an analog speaker
+  sink that bypasses a default-sink loopback). When the cpal device name
+  is `pipewire`, the `PIPEWIRE_NODE` env var (if set) is honoured.
+- `--cue-device` unset → no cue stream is opened; deck `cue` toggles
+  have no audible effect. Set this to a second cpal device name (e.g.
+  `hw:CARD=USB,DEV=0` for a USB DAC dongle) to enable PFL monitoring.
+  The two streams have independent clocks; drift is irrelevant for
+  cue since master and cue are heard on separate transducers.
 - `--midi LPD8` matches any port whose name contains "LPD8". Set to `""`
-  to disable MIDI entirely.
+  to disable MIDI entirely. The custom hardware enumerates as
+  "ODJ Controller", so `--midi "ODJ Controller"` selects it.
 - `--music-dir music` (relative to CWD). Audio files in this directory
   (non-recursive) populate the in-app track list.
 
@@ -104,13 +121,18 @@ is logged to stderr — read them off and edit the `match` arms in
 ├── Cargo.toml          # workspace + binary
 ├── src/
 │   ├── main.rs         # eframe entry, CLI parse, MIDI thread spawn
-│   └── midi.rs         # LPD8 MIDI input + mapping
-└── crates/
-    ├── control/        # DeckCommand enum, MusicalKey, ring buffer types
-    ├── decode/         # symphonia → TrackBuffer
-    ├── analysis/       # BPM + beat grid (DSP) + key (Krumhansl)
-    ├── audio/          # cpal stream, mixer, EQ, phase vocoder, beat align
-    └── ui/             # eframe app, track table, persistence
+│   └── midi.rs         # LPD8 / ODJ Controller MIDI input + jog handler
+├── crates/
+│   ├── control/        # DeckCommand enum, MusicalKey, ring buffer types
+│   ├── decode/         # symphonia → TrackBuffer
+│   ├── analysis/       # BPM + beat grid (DSP) + key (Krumhansl)
+│   ├── audio/          # cpal stream(s), mixer, EQ, phase vocoder,
+│   │                   #   beat align, cue ring buffer
+│   └── ui/             # eframe app, track table, persistence
+└── hardware/           # RP2040 firmware + schematic + flash.sh
+    ├── firmware/       # Pico SDK C project
+    ├── SCHEMATIC.md    # pinout, wiring tables
+    └── flash.sh        # sysex-reboot auto-flash workflow
 ```
 
 ## Acknowledgements

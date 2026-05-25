@@ -14,6 +14,9 @@ extern "C" {
 #define CFG_TUD_ENABLED         1
 #define CFG_TUH_ENABLED         0
 
+// Root-hub port 0 is in device mode (Pico has only one USB port).
+#define CFG_TUSB_RHPORT0_MODE   OPT_MODE_DEVICE
+
 // EP0 size — 64 bytes is the standard for full-speed USB devices.
 #define CFG_TUD_ENDPOINT0_SIZE  64
 

@@ -30,6 +30,9 @@ use cpal::{BufferSize, SampleFormat, Stream, StreamConfig};
 
 const RING_CAPACITY: usize = 256;
 const TARGET_BUFFER_FRAMES: u32 = 128;
+/// Cue audio ring (master callback writes, cue callback reads).
+/// Stereo f32 — sized for ~23 ms of audio at 44.1k (4096 / 2 / 44100).
+const CUE_RING_CAPACITY: usize = 4096;
 
 /// Cheaply cloneable handle for sending commands to the audio thread.
 #[derive(Clone)]
@@ -59,6 +62,7 @@ pub struct DeckTelemetry {
     pub beat_align: Arc<AtomicBool>,
     pub eq_low_db: Arc<AtomicU32>,  // f32 bits
     pub eq_high_db: Arc<AtomicU32>, // f32 bits
+    pub cue_on: Arc<AtomicBool>,
 }
 
 impl DeckTelemetry {
@@ -73,6 +77,7 @@ impl DeckTelemetry {
             beat_align: Arc::new(AtomicBool::new(true)),
             eq_low_db: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
             eq_high_db: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
+            cue_on: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -94,6 +99,9 @@ impl DeckTelemetry {
     pub fn is_beat_aligned(&self) -> bool {
         self.beat_align.load(Ordering::Relaxed)
     }
+    pub fn is_cue_on(&self) -> bool {
+        self.cue_on.load(Ordering::Relaxed)
+    }
     pub fn current_eq_low_db(&self) -> f32 {
         f32::from_bits(self.eq_low_db.load(Ordering::Relaxed))
     }
@@ -104,18 +112,27 @@ impl DeckTelemetry {
 
 pub struct Engine {
     _stream: Stream,
+    _cue_stream: Option<Stream>,
     sender: Sender,
     deck_a_tel: DeckTelemetry,
     deck_b_tel: DeckTelemetry,
 }
 
 impl Engine {
-    /// Build the engine and start the output stream.
-    pub fn start(device_name: Option<&str>) -> Result<Self> {
+    /// Build the engine and start the output stream(s).
+    ///
+    /// `device_name`: master / main output. Picks `pipewire` if None.
+    /// `cue_device_name`: optional secondary output for PFL/cue
+    /// monitoring. If None, no cue stream is opened and `SetCueOn`
+    /// commands have no audible effect.
+    pub fn start(
+        device_name: Option<&str>,
+        cue_device_name: Option<&str>,
+    ) -> Result<Self> {
         let host = cpal::default_host();
         let device = pick_device(&host, device_name)?;
         eprintln!(
-            "audio: device = {}",
+            "audio: master = {}",
             device.name().unwrap_or_else(|_| "?".into())
         );
 
@@ -136,12 +153,55 @@ impl Engine {
         };
 
         eprintln!(
-            "audio: stream {} ch, {} Hz, buffer {} frames ({:.2} ms)",
+            "audio: master {} ch, {} Hz, buffer {} frames ({:.2} ms)",
             channels,
             sample_rate,
             TARGET_BUFFER_FRAMES,
             TARGET_BUFFER_FRAMES as f32 * 1000.0 / sample_rate as f32
         );
+
+        // Optionally open the cue device. We open it first (so we can hand
+        // its consumer half into the master callback), then build streams.
+        let cue_setup = if let Some(name) = cue_device_name {
+            let cue_dev = pick_device(&host, Some(name))
+                .with_context(|| format!("cue device {name:?} not found"))?;
+            let cue_cfg = cue_dev
+                .default_output_config()
+                .context("cue device has no default output config")?;
+            if cue_cfg.sample_format() != SampleFormat::F32 {
+                bail!(
+                    "cue device sample format must be F32, got {:?}",
+                    cue_cfg.sample_format()
+                );
+            }
+            let cue_channels = cue_cfg.channels();
+            let cue_rate = cue_cfg.sample_rate().0;
+            eprintln!(
+                "audio: cue    = {} ({} ch, {} Hz)",
+                cue_dev.name().unwrap_or_else(|_| "?".into()),
+                cue_channels,
+                cue_rate,
+            );
+            if cue_rate != sample_rate || cue_channels != channels {
+                eprintln!(
+                    "audio: WARNING cue rate/channels differ from master \
+                     (cue {} Hz/{} ch vs master {} Hz/{} ch). The cue \
+                     stream will play at its own rate which may sound \
+                     wrong.",
+                    cue_rate, cue_channels, sample_rate, channels,
+                );
+            }
+            let (prod, cons) =
+                rtrb::RingBuffer::<f32>::new(CUE_RING_CAPACITY);
+            Some((cue_dev, cue_cfg, prod, cons))
+        } else {
+            None
+        };
+
+        let (cue_producer, cue_consumer_and_device) = match cue_setup {
+            Some((d, c, p, cons)) => (Some(p), Some((d, c, cons))),
+            None => (None, None),
+        };
 
         let (prod, cons) = control::channel(RING_CAPACITY);
         let deck_a_tel = DeckTelemetry::new();
@@ -154,12 +214,23 @@ impl Engine {
             channels as usize,
             deck_a_tel.clone(),
             deck_b_tel.clone(),
+            cue_producer,
         )
-        .context("building output stream")?;
-        stream.play().context("starting stream")?;
+        .context("building master output stream")?;
+        stream.play().context("starting master stream")?;
+
+        let cue_stream = if let Some((cd, ccfg, ccons)) = cue_consumer_and_device {
+            let s = build_cue_stream(&cd, &ccfg, ccons)
+                .context("building cue output stream")?;
+            s.play().context("starting cue stream")?;
+            Some(s)
+        } else {
+            None
+        };
 
         Ok(Self {
             _stream: stream,
+            _cue_stream: cue_stream,
             sender: Sender {
                 inner: Arc::new(Mutex::new(prod)),
             },
@@ -220,6 +291,9 @@ struct DeckState {
     playhead: f64,
     playing: bool,
     cue_frame: u64,
+    /// True if this deck's pre-fader signal should be mixed into the cue
+    /// bus. Independent per deck; multiple decks can be cued at once.
+    cue_on: bool,
     /// True iff playback was started by a CuePress while paused.
     in_preview: bool,
     gain_linear: f32,
@@ -245,6 +319,10 @@ struct DeckState {
     eq_high_db: f32,
     /// Engine sample rate (cached so EQ knob handlers can recompute coeffs).
     eq_sample_rate: f32,
+    /// Output amplitude envelope, 0.0..1.0. Ramps toward 1.0 while
+    /// `playing` is true and toward 0.0 when paused. Prevents the
+    /// audible click on play-start / pause.
+    play_envelope: f32,
 }
 
 impl DeckState {
@@ -255,6 +333,7 @@ impl DeckState {
             playhead: 0.0,
             playing: false,
             cue_frame: 0,
+            cue_on: false,
             in_preview: false,
             gain_linear: 1.0,
             speed_ratio: 1.0,
@@ -268,6 +347,7 @@ impl DeckState {
             eq_low_db: 0.0,
             eq_high_db: 0.0,
             eq_sample_rate: engine_rate as f32,
+            play_envelope: 0.0,
         }
     }
 }
@@ -281,6 +361,12 @@ struct Mixer {
     /// Per-callback scratch buffer (one deck at a time) for applying EQ
     /// before mixing into the shared output.
     scratch: Vec<f32>,
+    /// Per-callback accumulator for the cue mix (sum of pre-fader signals
+    /// from decks with `cue_on`).
+    cue_scratch: Vec<f32>,
+    /// Lock-free SPSC producer to the cue stream's callback. None if no
+    /// cue device was configured at engine start.
+    cue_producer: Option<rtrb::Producer<f32>>,
 }
 
 impl Mixer {
@@ -335,6 +421,9 @@ impl Mixer {
                 deck.cue_frame = 0;
                 deck.in_preview = false;
                 deck.playing = false;
+                // Reset envelope so a fresh load doesn't carry over
+                // residual fade-out from the previous track.
+                deck.play_envelope = 0.0;
             }
             DeckCommand::Play(_) => {
                 deck.playing = true;
@@ -386,7 +475,16 @@ impl Mixer {
                 }
             }
             DeckCommand::Seek { sample_pos, .. } => {
-                deck.playhead = sample_pos as f64;
+                // Clamp to the loaded buffer's range so a wild seek (e.g.,
+                // from jog-scrub or a click past the waveform) leaves the
+                // deck at a valid position rather than playing into garbage.
+                let pos = if let Some(buf) = deck.buffer.as_ref() {
+                    let max = (buf.frames() as u64).saturating_sub(1);
+                    sample_pos.min(max)
+                } else {
+                    sample_pos
+                };
+                deck.playhead = pos as f64;
             }
             DeckCommand::SetSpeed { ratio, .. } => {
                 deck.speed_ratio = ratio.clamp(0.5, 2.0);
@@ -395,9 +493,11 @@ impl Mixer {
                 deck.speed_ratio = (deck.speed_ratio + delta).clamp(0.92, 1.08);
             }
             DeckCommand::SetNudge { offset, .. } => {
-                // Loose clamp: a momentary push can exceed the persistent
-                // ±8% range without alarm.
-                deck.nudge_offset = offset.clamp(-0.5, 0.5);
+                // Allow large magnitudes so jog-scrub can drive effective
+                // playback rate to several times normal (and negative for
+                // reverse). Vinyl render clamps the final effective speed
+                // again, so this isn't unbounded.
+                deck.nudge_offset = offset.clamp(-10.0, 10.0);
             }
             DeckCommand::SetQuantize { on, .. } => {
                 deck.quantize = on;
@@ -423,6 +523,9 @@ impl Mixer {
             }
             DeckCommand::SetBeatAlign { on, .. } => {
                 deck.beat_align = on;
+            }
+            DeckCommand::SetCueOn { on, .. } => {
+                deck.cue_on = on;
             }
             DeckCommand::Sync { .. } => unreachable!("handled above"),
         }
@@ -457,24 +560,66 @@ impl Mixer {
         if self.scratch.len() < needed {
             self.scratch.resize(needed, 0.0);
         }
-        let scratch = &mut self.scratch[..needed];
+        if self.cue_producer.is_some() && self.cue_scratch.len() < needed {
+            self.cue_scratch.resize(needed, 0.0);
+        }
+        let scratch_a = &mut self.scratch[..needed];
+        if self.cue_producer.is_some() {
+            self.cue_scratch[..needed].fill(0.0);
+        }
 
-        // Deck A: render → EQ → gain → mix
-        scratch.fill(0.0);
-        render_into(&mut self.deck_a, scratch, out_channels, self.engine_sample_rate);
-        apply_eq(&mut self.deck_a, scratch, out_channels);
+        // Deck A: render → EQ → fade envelope → (cue tap) → gain → master
+        scratch_a.fill(0.0);
+        render_into(&mut self.deck_a, scratch_a, out_channels, self.engine_sample_rate);
+        apply_eq(&mut self.deck_a, scratch_a, out_channels);
+        apply_play_envelope(
+            &mut self.deck_a,
+            scratch_a,
+            out_channels,
+            self.engine_sample_rate,
+        );
+        if self.cue_producer.is_some() && self.deck_a.cue_on {
+            for (c, s) in self.cue_scratch[..needed].iter_mut().zip(scratch_a.iter()) {
+                *c += *s;
+            }
+        }
         let g_a = self.deck_a.gain_linear;
-        for (o, s) in out.iter_mut().zip(scratch.iter()) {
+        for (o, s) in out.iter_mut().zip(scratch_a.iter()) {
             *o += *s * g_a;
         }
 
-        // Deck B: same flow
-        scratch.fill(0.0);
-        render_into(&mut self.deck_b, scratch, out_channels, self.engine_sample_rate);
-        apply_eq(&mut self.deck_b, scratch, out_channels);
+        // Deck B: same flow. (Re-borrow `scratch` since we used `scratch_a`
+        // above; same underlying buffer.)
+        let scratch_b = &mut self.scratch[..needed];
+        scratch_b.fill(0.0);
+        render_into(&mut self.deck_b, scratch_b, out_channels, self.engine_sample_rate);
+        apply_eq(&mut self.deck_b, scratch_b, out_channels);
+        apply_play_envelope(
+            &mut self.deck_b,
+            scratch_b,
+            out_channels,
+            self.engine_sample_rate,
+        );
+        if self.cue_producer.is_some() && self.deck_b.cue_on {
+            for (c, s) in self.cue_scratch[..needed].iter_mut().zip(scratch_b.iter()) {
+                *c += *s;
+            }
+        }
         let g_b = self.deck_b.gain_linear;
-        for (o, s) in out.iter_mut().zip(scratch.iter()) {
+        for (o, s) in out.iter_mut().zip(scratch_b.iter()) {
             *o += *s * g_b;
+        }
+
+        // Push the cue mix to the secondary stream's ring buffer. If the
+        // ring is full (cue stream lagging) we drop the excess — silently
+        // accepting that cue will fall behind master rather than blocking
+        // the audio thread.
+        if let Some(prod) = self.cue_producer.as_mut() {
+            for s in self.cue_scratch[..needed].iter() {
+                if prod.push(*s).is_err() {
+                    break;
+                }
+            }
         }
 
         publish_telemetry(&self.deck_a, &self.deck_a_tel);
@@ -483,7 +628,14 @@ impl Mixer {
 }
 
 fn render_into(deck: &mut DeckState, scratch: &mut [f32], out_channels: usize, engine_rate: u32) {
-    if deck.pitch_lock {
+    // PV path doesn't support reverse playback (FFT analysis hop is
+    // positive by construction). If the user nudged effective speed
+    // non-positive — e.g., backward jog scrub — fall through to the
+    // vinyl renderer for this callback. PV's internal phase/OLA state
+    // persists across the bypass, so play resumes cleanly when speed
+    // goes positive again.
+    let effective_speed = deck.speed_ratio + deck.nudge_offset;
+    if deck.pitch_lock && effective_speed > 0.0 {
         render_deck_pv(deck, scratch, out_channels, engine_rate);
     } else {
         render_deck(deck, scratch, out_channels, engine_rate);
@@ -502,6 +654,33 @@ fn apply_eq(deck: &mut DeckState, buf: &mut [f32], out_channels: usize) {
     }
 }
 
+/// Apply the deck's play envelope per-sample. Ramps the envelope toward
+/// 1.0 while `playing` is set, toward 0.0 when not, over FADE_SECS of
+/// real time. Multiplies the scratch buffer by the (instantaneous)
+/// envelope value — prevents the click that an abrupt 0→full or full→0
+/// transition would produce.
+fn apply_play_envelope(
+    deck: &mut DeckState,
+    buf: &mut [f32],
+    out_channels: usize,
+    engine_rate: u32,
+) {
+    const FADE_SECS: f32 = 0.005; // 5 ms ramp
+    let target = if deck.playing { 1.0_f32 } else { 0.0_f32 };
+    let step = 1.0 / (engine_rate as f32 * FADE_SECS);
+    for frame in buf.chunks_mut(out_channels) {
+        if deck.play_envelope < target {
+            deck.play_envelope = (deck.play_envelope + step).min(target);
+        } else if deck.play_envelope > target {
+            deck.play_envelope = (deck.play_envelope - step).max(target);
+        }
+        let e = deck.play_envelope;
+        for ch in frame.iter_mut() {
+            *ch *= e;
+        }
+    }
+}
+
 fn publish_telemetry(deck: &DeckState, tel: &DeckTelemetry) {
     tel.playhead.store(deck.playhead as u64, Ordering::Relaxed);
     tel.playing.store(deck.playing, Ordering::Relaxed);
@@ -514,6 +693,7 @@ fn publish_telemetry(deck: &DeckState, tel: &DeckTelemetry) {
         .store(deck.eq_low_db.to_bits(), Ordering::Relaxed);
     tel.eq_high_db
         .store(deck.eq_high_db.to_bits(), Ordering::Relaxed);
+    tel.cue_on.store(deck.cue_on, Ordering::Relaxed);
 }
 
 /// Shift `this` deck's playhead so its nearest beat lines up in real time
@@ -585,7 +765,10 @@ fn beat_align_to(this: &mut DeckState, other: &DeckState) {
 /// Vinyl-mode render: linear interp from source, step accounts for both
 /// sample-rate mismatch AND speed_ratio. Pitch couples to tempo.
 fn render_deck(deck: &mut DeckState, out: &mut [f32], out_channels: usize, engine_rate: u32) {
-    if !deck.playing {
+    // Keep rendering for a few samples after `playing` flips false so
+    // `apply_play_envelope` can ramp the output down to 0 (click-free
+    // pause). Once the envelope has decayed, bail.
+    if !deck.playing && deck.play_envelope <= 0.0 {
         return;
     }
     let Some(buf) = deck.buffer.as_ref() else {
@@ -598,11 +781,21 @@ fn render_deck(deck: &mut DeckState, out: &mut [f32], out_channels: usize, engin
         return;
     }
     let samples = &buf.samples;
-    let effective_speed = (deck.speed_ratio + deck.nudge_offset).clamp(0.1, 4.0);
+    // Allow negative effective_speed so the deck can play backwards (used
+    // by paused-jog scrub). Magnitude clamped at 4× either direction.
+    let effective_speed = (deck.speed_ratio + deck.nudge_offset).clamp(-4.0, 4.0);
     let step = (buf.sample_rate as f64 / engine_rate as f64) * effective_speed as f64;
 
     for frame in out.chunks_mut(out_channels) {
         let pos_f = deck.playhead;
+        // Bounds: stop at either end of the track. Lower bound checks
+        // pos_f < 0.0 explicitly because `pos_f as usize` is undefined
+        // for negative floats on some targets.
+        if pos_f < 0.0 {
+            deck.playing = false;
+            deck.playhead = 0.0;
+            break;
+        }
         let pos = pos_f as usize;
         if pos + 1 >= total_frames {
             deck.playing = false;
@@ -633,7 +826,9 @@ fn render_deck(deck: &mut DeckState, out: &mut [f32], out_channels: usize, engin
 /// (src_sr/eng_sr per engine input sample); the PV stretches in time so
 /// tempo follows speed_ratio while pitch stays at native.
 fn render_deck_pv(deck: &mut DeckState, out: &mut [f32], out_channels: usize, engine_rate: u32) {
-    if !deck.playing {
+    // Same rationale as render_deck: keep producing samples while the
+    // envelope is still ramping down so the fade-out is audible.
+    if !deck.playing && deck.play_envelope <= 0.0 {
         return;
     }
     let Some(buf) = deck.buffer.as_ref() else {
@@ -726,6 +921,7 @@ fn cmd_target(cmd: &DeckCommand) -> DeckId {
         | DeckCommand::SetEqLow { deck, .. }
         | DeckCommand::SetEqHigh { deck, .. }
         | DeckCommand::SetBeatAlign { deck, .. }
+        | DeckCommand::SetCueOn { deck, .. }
         | DeckCommand::Sync { deck } => *deck,
     }
 }
@@ -779,6 +975,7 @@ fn build_stream(
     out_channels: usize,
     deck_a_tel: DeckTelemetry,
     deck_b_tel: DeckTelemetry,
+    cue_producer: Option<rtrb::Producer<f32>>,
 ) -> Result<Stream> {
     let mut mixer = Mixer {
         deck_a: DeckState::new(sample_rate),
@@ -787,8 +984,10 @@ fn build_stream(
         deck_b_tel,
         engine_sample_rate: sample_rate,
         scratch: Vec::with_capacity(4096),
+        cue_scratch: Vec::with_capacity(4096),
+        cue_producer,
     };
-    let err_fn = |e| eprintln!("audio: stream error: {e}");
+    let err_fn = |e| eprintln!("audio: master stream error: {e}");
     device
         .build_output_stream(
             config,
@@ -802,4 +1001,32 @@ fn build_stream(
             None,
         )
         .context("build_output_stream failed")
+}
+
+/// Cue stream callback: pop interleaved stereo samples from the SPSC
+/// ring and write to `out`. Underrun → silence (0.0). Trivial; no engine
+/// state lives here.
+fn build_cue_stream(
+    device: &cpal::Device,
+    supported: &cpal::SupportedStreamConfig,
+    mut consumer: rtrb::Consumer<f32>,
+) -> Result<Stream> {
+    let config = StreamConfig {
+        channels: supported.channels(),
+        sample_rate: supported.sample_rate(),
+        buffer_size: BufferSize::Fixed(TARGET_BUFFER_FRAMES),
+    };
+    let err_fn = |e| eprintln!("audio: cue stream error: {e}");
+    device
+        .build_output_stream(
+            &config,
+            move |out: &mut [f32], _info| {
+                for sample in out.iter_mut() {
+                    *sample = consumer.pop().unwrap_or(0.0);
+                }
+            },
+            err_fn,
+            None,
+        )
+        .context("cue build_output_stream failed")
 }

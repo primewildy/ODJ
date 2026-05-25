@@ -27,6 +27,7 @@ connector points up and you're looking at the component side.
 | 15       | GP11 | Button 2 — CUE (in, pull-up)   | Arcade button switch     |
 | 16       | GP12 | Button 3 — Nudge-down (in, pull-up) | Arcade button switch |
 | 17       | GP13 | Button 4 — Nudge-up (in, pull-up)   | Arcade button switch |
+| 24       | GP18 | Play LED out (active high)     | Button 1 LED `+`         |
 | 9        | GP6  | Mux S0 (out)                   | 74HC4051 pin 11 (S0)     |
 | 10       | GP7  | Mux S1 (out)                   | 74HC4051 pin 10 (S1)     |
 | 11       | GP8  | Mux S2 (out)                   | 74HC4051 pin 9 (S2)      |
@@ -104,21 +105,39 @@ B10K pot           Slide fader 10K
 
 ## Arcade button wiring
 
-Each button has 2 switch terminals (the LED has its own separate pair,
-ignored for now). One terminal goes to a Pico GPIO, the other to GND.
-The Pico uses internal pull-ups, so a press grounds the GPIO (active low).
+Each button has 4 terminals: 2 for the switch contacts, 2 for the LED
+(usually marked `+` and `−`). One switch terminal goes to a Pico GPIO,
+the other to GND; the Pico's internal pull-ups make a press an active-low
+signal.
+
+For the **Play button only**, the LED is driven by the Pico so it
+mirrors the deck's playing state. The firmware listens for MIDI
+`note_on 40` / `note_off 40` from the host and drives GP18 accordingly.
 
 ```
-Arcade button     Pico
-  switch term 1 → GPIO (e.g. GP10)
-  switch term 2 → GND
-  LED + (red)   → optional 5V via resistor (always-on, for now)
-  LED − (black) → GND
+Arcade button (Play, button 1)     Pico
+  switch term 1                  → GP10 (pin 14)
+  switch term 2                  → GND
+  LED +                          → GP18 (pin 24)   ← driven by firmware
+  LED −                          → GND
 ```
 
-If your specific arcade button's LED runs at 12 V you'll need an external
-regulator — most "5 V" panel-mount arcade buttons just have a series
-resistor on the PCB and run fine from VBUS.
+For the **other buttons** (Cue, Nudge ±), the LED is just left
+disconnected or hard-wired always-on to VBUS via the button's built-in
+series resistor. We're not lighting those from firmware yet.
+
+3.3 V GPIO source mode works for the supplied "5 V arcade LED" buttons —
+the LED's internal series resistor is sized for 5 V, so at 3.3 V it
+sits at roughly 60-70% of rated brightness. Visible in daylight; bright
+enough for stage. If you really need full brightness, switch to:
+
+```
+LED + → VBUS (5 V)
+LED − → GP18 via a small (~150 Ω) resistor
+```
+
+…and flip the firmware to active-low (negate `gpio_put` in
+`handle_note`). Not necessary for the prototype.
 
 ## Layout overview (block diagram)
 

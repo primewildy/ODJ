@@ -21,6 +21,8 @@ at 128 frames × 44.1 kHz F32 stereo.
 - macOS / Windows.
 - Library management beyond a single non-recursive music directory.
 - Recording the mix to file.
+- Sample-accurate sync between master and cue output streams (separate
+  clocks; drift is irrelevant for headphone cueing).
 
 ## 3. Threading model
 
@@ -128,6 +130,7 @@ enum DeckCommand {
     SetEqLow { deck, db: f32 },
     SetEqHigh { deck, db: f32 },
     SetBeatAlign { deck, on: bool },
+    SetCueOn { deck, on: bool },         // PFL toggle: this deck → cue mix
     Sync { deck },                       // match this deck to the other
 }
 ```
@@ -317,7 +320,52 @@ On startup the cache file is loaded into a `HashMap<PathBuf,
 CachedAnalysis>` behind a `Mutex`. The background worker reads/writes it
 serially; the UI reads it during table render.
 
-## 14. Per-process device routing
+## 14. Cue / PFL routing
+
+When a second cpal device is configured (`--cue-device <name>`), the
+engine opens a separate output stream alongside master and accumulates
+a parallel "cue mix" each callback:
+
+```
+For each deck (post-EQ, post-fade-envelope scratch):
+    master_out  += scratch * deck.gain_linear     (channel fader)
+    if deck.cue_on:
+        cue_mix += scratch                         (pre-fader, no gain)
+
+After both decks:
+    push cue_mix into a lock-free SPSC ring (`rtrb::Producer<f32>`)
+```
+
+The cue stream's cpal callback is a trivial consumer:
+
+```
+for each sample in out:
+    *sample = cue_consumer.pop().unwrap_or(0.0)
+```
+
+**Ring size:** 4096 stereo samples ≈ 23 ms at 44.1 k. Plenty for jitter
+between the two stream callbacks.
+
+**Drift:** the two devices have independent clocks. Over a long
+session the cue stream's position drifts relative to master by up to
+tens of milliseconds — pop-ups (consumer ahead) appear as silence in
+headphones, full ring (consumer behind) drops samples from the
+producer side. **Both modes are inaudible during normal cue use**:
+master and cue are heard on separate transducers (speakers vs
+headphones); never directly compared.
+
+**Why pre-fader:** standard DJ PFL semantics. The channel fader stays
+down for the deck you're cueing (master doesn't hear it), but the
+cue bus picks up the post-EQ signal so you can tweak EQ during prep
+with audible feedback in headphones.
+
+**Multiple decks cued at once** sum into the cue bus — useful for
+checking a phrase transition between two playing tracks.
+
+If no `--cue-device` is given, the entire cue path is bypassed
+(`Mixer::cue_producer` is `None`); zero overhead.
+
+## 15. Per-process device routing
 
 cpal's `default_output_device()` returns a broken "default" ALSA PCM on
 PipeWire. We explicitly find the cpal device named `"pipewire"` and use
@@ -326,7 +374,7 @@ loopback) the `--device <pipewire-node>` CLI flag sets `PIPEWIRE_NODE`
 before audio init. This is **per-process** — does not change the user's
 global default sink. See `src/main.rs` and `crates/audio/src/lib.rs::pick_device`.
 
-## 15. Phase-2 hardware (still in the plan)
+## 16. Phase-2 hardware (still in the plan)
 
 Custom controller built around RP2040 or ESP32-S3 + TinyUSB MIDI. Plan:
 
@@ -339,7 +387,7 @@ Custom controller built around RP2040 or ESP32-S3 + TinyUSB MIDI. Plan:
 - Class-compliant USB MIDI → no host driver work; midir picks it up the
   same as the LPD8.
 
-## 16. Build sequence (historical)
+## 17. Build sequence (historical)
 
 The project was built in roughly this order, captured here for context:
 

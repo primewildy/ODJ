@@ -105,13 +105,17 @@ priority order within each section.
 
 ## Hardware build (this branch)
 
-See [`hardware/`](./hardware/) and the [`hardware-prototype`] branch.
+See [`hardware/`](./hardware/) and the `hardware-prototype` branch.
 
 - [x] Pico SDK firmware (encoder + buttons + mux ADC → USB MIDI).
 - [x] Schematic + build/flash docs.
-- [ ] **Assemble and bring up Deck A side.** Wire the encoder first
-  per `hardware/SCHEMATIC.md` § "Build order", verify with
-  `aseqdump`, then add buttons → mux + pots → faders.
+- [x] Sysex-triggered reboot to BOOTSEL + `flash.sh` workflow.
+- [x] Encoder wired and validated. Polled quadrature decoder is fine
+  at human spin rates.
+- [x] Bidirectional MIDI for Play-button LED feedback.
+- [x] Host-side encoder → nudge (playing) + audible scrub (paused).
+- [ ] **Wire remaining buttons, mux + pots, slide faders** per
+  SCHEMATIC.md.
 - [ ] **PIO quadrature decoder.** Polled decoder is plenty fast for
   the 600 P/R encoder at human spin rates, but a PIO program would
   free the CPU and survive higher RPMs. Pico SDK has a reference
@@ -121,16 +125,21 @@ See [`hardware/`](./hardware/) and the [`hardware-prototype`] branch.
   detection later.
 - [ ] **74HC165 button expansion** when we add the full performance
   pad grid (>15 buttons).
-- [ ] **LED feedback to the device.** Currently MIDI is one-way
-  (controller → host). Add a host MIDI output thread that mirrors
-  deck state (playing, cue armed, sync, EQ kill) to LEDs.
+- [ ] **More LEDs.** Currently only the Play button. Cue, sync, etc.
+  follow the same pattern.
 
 ## Audio routing
 
-- [ ] **Stereo cue / preview output.** Useful when a second output
-  device is available. Without it, the existing CUE preview just routes
-  through the main mix.
-- [ ] **UI for `--device` selection.** Currently CLI-only.
+- [x] **Stereo cue / preview output.** Done. `--cue-device <name>`
+  opens a second cpal stream; per-deck `cue` toggles route post-EQ
+  pre-fader audio into it. See DESIGN.md §14.
+- [ ] **Cue mix bus master volume.** Currently the cue mix is summed at
+  unit gain. Add a host-side `cue_gain` and a UI slider / MIDI knob.
+- [ ] **Cue clock drift compensation.** Two USB audio devices drift by
+  tens of ms over an hour. Resampling the cue stream to match master's
+  rate would eliminate this. Not yet noticeable in practice.
+- [ ] **UI for `--device` selection.** Currently CLI-only. Could
+  enumerate cpal devices at startup with a dropdown.
 
 ## Tech debt
 

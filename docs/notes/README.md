@@ -22,3 +22,4 @@ you want the rationale behind a specific decision.
 - [key_detection.md](key_detection.md) — Krumhansl-Schmuckler + Camelot
 - [persistence.md](persistence.md) — favourites + analysis cache file format
 - [downbeat_idea.md](downbeat_idea.md) — v1.5 downbeat detection plan
+- [cue_routing.md](cue_routing.md) — dual-output cue bus + drift trade-off

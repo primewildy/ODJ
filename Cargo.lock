@@ -230,6 +230,7 @@ dependencies = [
  "anyhow",
  "control",
  "cpal",
+ "rtrb",
  "rustfft",
 ]
 

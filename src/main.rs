@@ -11,10 +11,18 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(name = "dj", about = "DJ controller — two decks, GUI + LPD8")]
 struct Cli {
-    /// Optional PipeWire node name to route this process to.
-    /// Sets PIPEWIRE_NODE before audio init — per-process, won't affect other apps.
+    /// Optional cpal device name for the master output. Defaults to the
+    /// `pipewire` device on PipeWire systems (which then follows either
+    /// the default sink or the PIPEWIRE_NODE env var).
     #[arg(long)]
     device: Option<String>,
+
+    /// Optional cpal device name for the cue / PFL output (headphones).
+    /// When set, an independent second audio stream is opened on this
+    /// device and decks with their `cue` toggle on are mixed into it
+    /// pre-fader. Example: `--cue-device hw:CARD=USB,DEV=0`.
+    #[arg(long)]
+    cue_device: Option<String>,
 
     /// Substring to match the MIDI input port name. Default "LPD8".
     /// Set to "" to disable MIDI entirely.
@@ -36,13 +44,17 @@ fn main() -> Result<()> {
         eprintln!("PIPEWIRE_NODE = {node}");
     }
 
-    let engine = audio::Engine::start(None)?;
+    let engine = audio::Engine::start(
+        cli.device.as_deref(),
+        cli.cue_device.as_deref(),
+    )?;
     let sender = engine.sender();
 
     let midi_status = if cli.midi.is_empty() {
         "MIDI: disabled".to_string()
     } else {
-        match midi::start(&cli.midi, sender.clone()) {
+        let tel_a = engine.telemetry(control::DeckId::A);
+        match midi::start(&cli.midi, sender.clone(), tel_a) {
             Ok(m) => {
                 eprintln!("midi: connected to {}", m.port_name);
                 // Keep alive for the whole program lifetime by leaking. Simpler

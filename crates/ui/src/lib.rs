@@ -76,6 +76,12 @@ pub fn scan_music_dir(dir: &Path) -> Vec<TrackMeta> {
             if !SUPPORTED_EXTS.iter().any(|e| *e == ext) {
                 continue;
             }
+            // Canonicalise so the in-memory path is identical regardless of
+            // whether music_dir was passed in as relative ("music") or
+            // absolute ("/home/.../music"). Without this, favourites and
+            // cache lookups (which key on PathBuf) silently miss after a
+            // change in CLI invocation.
+            let p = p.canonicalize().unwrap_or(p);
             let filename = p
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -761,8 +767,8 @@ fn deck_panel(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sender) 
         ui.label(key_str);
     });
 
-    overview_waveform(ui, d);
-    zoom_view(ui, d);
+    overview_waveform(ui, d, deck, sender);
+    zoom_view(ui, d, deck, sender);
 
     ui.horizontal(|ui| {
         let playing = d.telemetry.is_playing();
@@ -801,6 +807,11 @@ fn deck_panel(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sender) 
         }
         if ui.button("⟲ Sync").clicked() {
             let _ = sender.send(DeckCommand::Sync { deck });
+        }
+        // PFL / cue monitor toggle. Mirrors deck.cue_on telemetry.
+        let mut cue_on = d.telemetry.is_cue_on();
+        if ui.toggle_value(&mut cue_on, "🎧 CUE").changed() {
+            let _ = sender.send(DeckCommand::SetCueOn { deck, on: cue_on });
         }
 
         ui.separator();
@@ -854,11 +865,21 @@ fn deck_panel(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sender) 
     });
 }
 
-fn overview_waveform(ui: &mut egui::Ui, d: &DeckUi) {
+fn overview_waveform(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
     let desired = Vec2::new(ui.available_width(), 60.0);
-    let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(desired, Sense::click());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, Color32::from_gray(20));
+
+    // Click-to-seek: clicking anywhere on the overview jumps the playhead
+    // to that fraction of the track.
+    if resp.clicked() && d.total_frames > 0 {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            let frac = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+            let sample_pos = (frac as f64 * d.total_frames as f64) as u64;
+            let _ = sender.send(DeckCommand::Seek { deck, sample_pos });
+        }
+    }
 
     if d.overview.is_empty() || d.total_frames == 0 {
         painter.text(
@@ -907,9 +928,9 @@ fn overview_waveform(ui: &mut egui::Ui, d: &DeckUi) {
 /// Scrolling zoom view: ZOOM_BEATS-wide window around the playhead.
 /// Beat grid drawn as vertical lines (every 4th brighter as a presumed
 /// downbeat — real downbeat detection is v1.5).
-fn zoom_view(ui: &mut egui::Ui, d: &DeckUi) {
+fn zoom_view(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
     let desired = Vec2::new(ui.available_width(), 90.0);
-    let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(desired, Sense::click());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, Color32::from_gray(15));
 
@@ -1019,6 +1040,18 @@ fn zoom_view(ui: &mut egui::Ui, d: &DeckUi) {
         ],
         Stroke::new(2.0, Color32::from_rgb(255, 200, 80)),
     );
+
+    // Click-to-seek: map the clicked x → time → sample index.
+    if resp.clicked() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            let frac = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64;
+            let target_secs = view_start + frac * window_secs;
+            if target_secs >= 0.0 {
+                let sample_pos = (target_secs * d.sample_rate as f64) as u64;
+                let _ = sender.send(DeckCommand::Seek { deck, sample_pos });
+            }
+        }
+    }
 }
 
 fn sort_header(

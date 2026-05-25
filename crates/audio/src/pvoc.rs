@@ -35,6 +35,12 @@ pub struct PhaseVocoder {
     synth_phase: Vec<Vec<f32>>, // [ch][bin], len N_FFT/2 + 1
     ola: Vec<Vec<f32>>,         // [ch][0..N_FFT] OLA accumulator
 
+    /// Per-frame scratch for identity phase locking. Pre-allocated to N/2+1
+    /// to avoid per-callback allocation.
+    mag: Vec<f32>,
+    phase_in: Vec<f32>,
+    nearest_peak: Vec<usize>,
+
     /// Caller writes hop_a samples per channel here before process_frame.
     pub input_buf: Vec<Vec<f32>>, // [ch][0..MAX_HOP_A]
 
@@ -43,6 +49,66 @@ pub struct PhaseVocoder {
 
     /// Fractional accumulator for hop_a, so non-integer speeds don't drift.
     hop_a_accum: f64,
+}
+
+/// For each bin, write the index of the nearest *magnitude peak* (local
+/// max) into `out`. A peak bin's own entry is itself. Pre-allocated `out`
+/// of length n_bins; no allocation.
+fn map_to_nearest_peak(mag: &[f32], out: &mut [usize]) {
+    let n = mag.len();
+    debug_assert_eq!(out.len(), n);
+    if n == 0 {
+        return;
+    }
+    if n == 1 {
+        out[0] = 0;
+        return;
+    }
+
+    // Forward sweep: each bin inherits the most recent peak seen.
+    let mut last_peak: usize = 0;
+    let mut have_peak = false;
+    for k in 0..n {
+        let is_peak = if k == 0 {
+            mag[0] > mag[1]
+        } else if k == n - 1 {
+            mag[n - 1] > mag[n - 2]
+        } else {
+            mag[k] > mag[k - 1] && mag[k] > mag[k + 1]
+        };
+        if is_peak {
+            last_peak = k;
+            have_peak = true;
+        }
+        out[k] = if have_peak { last_peak } else { k };
+    }
+    // If no peak was seen at all (uniformly-zero / monotonic spectrum), bail.
+    if !have_peak {
+        return;
+    }
+
+    // Backward sweep: a later peak might be closer for bins to the left
+    // of any peak. Replace `out[k]` if the right-side peak is nearer.
+    let mut last_peak_r: usize = out[n - 1];
+    for k in (0..n).rev() {
+        // Detect peaks again (same condition); reuse the existing test.
+        let is_peak = if k == 0 {
+            mag[0] > mag[1]
+        } else if k == n - 1 {
+            mag[n - 1] > mag[n - 2]
+        } else {
+            mag[k] > mag[k - 1] && mag[k] > mag[k + 1]
+        };
+        if is_peak {
+            last_peak_r = k;
+        }
+        let forward = out[k];
+        let dist_forward = (k as isize - forward as isize).unsigned_abs();
+        let dist_back = (k as isize - last_peak_r as isize).unsigned_abs();
+        if dist_back < dist_forward {
+            out[k] = last_peak_r;
+        }
+    }
 }
 
 impl PhaseVocoder {
@@ -64,6 +130,9 @@ impl PhaseVocoder {
             last_phase: (0..channels).map(|_| vec![0.0; n_bins]).collect(),
             synth_phase: (0..channels).map(|_| vec![0.0; n_bins]).collect(),
             ola: (0..channels).map(|_| vec![0.0; N_FFT]).collect(),
+            mag: vec![0.0; n_bins],
+            phase_in: vec![0.0; n_bins],
+            nearest_peak: vec![0usize; n_bins],
             input_buf: (0..channels).map(|_| vec![0.0; MAX_HOP_A]).collect(),
             ready: 0,
             hop_a_accum: 0.0,
@@ -125,27 +194,50 @@ impl PhaseVocoder {
             }
             self.fft_fwd.process(&mut self.scratch);
 
-            // Phase update per bin (positive freqs only).
+            // Pass 1: extract magnitudes and input phases for the positive
+            // freq half. Reusing pre-allocated buffers — no allocation here.
             for k in 0..n_bins {
                 let c = self.scratch[k];
-                let mag = (c.re * c.re + c.im * c.im).sqrt();
-                let phase = c.im.atan2(c.re);
+                self.mag[k] = (c.re * c.re + c.im * c.im).sqrt();
+                self.phase_in[k] = c.im.atan2(c.re);
+            }
 
+            // Pass 2: identity phase locking — for each bin, find the
+            // nearest *magnitude peak* (local max). Then advance only
+            // peak phases via the PV formula and lock non-peak bins to
+            // track their nearest peak, preserving the relative input
+            // phase. This stops adjacent bins drifting apart, which is
+            // what causes the chorusy "amplitude wobble" — especially
+            // audible in the high end where bins per critical band is
+            // largest.
+            map_to_nearest_peak(&self.mag, &mut self.nearest_peak);
+
+            for k in 0..n_bins {
+                if self.nearest_peak[k] != k {
+                    continue; // non-peak — handled below
+                }
                 let expected = expected_per_bin * k as f32;
-                let mut dphase = phase - self.last_phase[ch][k] - expected;
-                // Wrap to [-PI, PI]
+                let mut dphase = self.phase_in[k] - self.last_phase[ch][k] - expected;
                 dphase -= two_pi * (dphase / two_pi).round();
                 let true_freq = (expected + dphase) / hop_a_f;
 
                 self.synth_phase[ch][k] += true_freq * HOP_S as f32;
-                // Keep bounded for precision.
                 let sp = self.synth_phase[ch][k];
                 self.synth_phase[ch][k] = sp - two_pi * (sp / two_pi).floor();
+            }
 
-                self.last_phase[ch][k] = phase;
+            for k in 0..n_bins {
+                let p = self.nearest_peak[k];
+                if k != p {
+                    // Lock to nearest peak, preserving the *input* phase
+                    // relationship between this bin and its peak.
+                    self.synth_phase[ch][k] =
+                        self.synth_phase[ch][p] + (self.phase_in[k] - self.phase_in[p]);
+                }
+                self.last_phase[ch][k] = self.phase_in[k];
 
                 let sp = self.synth_phase[ch][k];
-                self.scratch[k] = Complex::new(mag * sp.cos(), mag * sp.sin());
+                self.scratch[k] = Complex::new(self.mag[k] * sp.cos(), self.mag[k] * sp.sin());
             }
             // Hermitian symmetry for the negative-frequency half so iFFT
             // yields a real signal.

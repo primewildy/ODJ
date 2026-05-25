@@ -126,6 +126,11 @@ pub enum DeckCommand {
     /// so its nearest beat aligns with the OTHER deck's nearest beat. Used
     /// to correct slight cue mis-timing automatically.
     SetBeatAlign { deck: DeckId, on: bool },
+    /// PFL / cue-monitor toggle. When ON, this deck's post-EQ pre-fader
+    /// signal is summed into the cue bus (routed to the secondary audio
+    /// output, typically headphones). Multiple decks can be cued at once;
+    /// their cue contributions sum.
+    SetCueOn { deck: DeckId, on: bool },
 }
 
 pub type CommandProducer = rtrb::Producer<DeckCommand>;

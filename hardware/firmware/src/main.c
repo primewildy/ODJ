@@ -19,10 +19,12 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "bsp/board_api.h"
 #include "hardware/adc.h"
 #include "hardware/gpio.h"
+#include "pico/bootrom.h"
 #include "pico/stdlib.h"
 #include "tusb.h"
 
@@ -41,6 +43,10 @@
 #define PIN_MUX_S2      8
 #define PIN_MUX_OUT    26  // ADC0
 #define ADC_INPUT       0  // ADC channel for GP26
+
+// LED feedback. Host sends note_on 40 → LED on, note_off 40 → LED off,
+// mirroring Deck A's playing state.
+#define PIN_LED_PLAY_A 18
 
 // ===== MIDI mapping =====
 
@@ -66,6 +72,12 @@ static const uint8_t BUTTON_NOTE[NUM_BUTTONS] = { 40, 41, 42, 43 };
 #define SCAN_INTERVAL_MS    5
 #define MUX_SETTLE_US       5
 
+// 7-bit deadband for the mux scan. Required change before a CC is emitted.
+// Silences ±1-LSB ADC jitter on properly-wired pots AND keeps
+// unconnected/floating mux inputs quiet during prototype assembly. Real
+// pot movement easily exceeds 2 steps per scan tick.
+#define MUX_DEADBAND        2
+
 // ===== State =====
 
 // Quadrature accumulator. Updated on every poll; drained at MIDI send time.
@@ -75,11 +87,13 @@ static uint8_t encoder_last_state = 0;
 // 4-state Gray-code transition table.
 // Index: (prev_AB << 2) | curr_AB. Value: +1 / 0 / -1.
 // Invalid transitions (two bits flipped at once) return 0.
+// Sign convention matches the user's "spin → forward feels forward" — flip
+// every non-zero entry to invert the direction.
 static const int8_t QDEC_TABLE[16] = {
-    0, -1, +1,  0,
-   +1,  0,  0, -1,
-   -1,  0,  0, +1,
     0, +1, -1,  0,
+   -1,  0,  0, +1,
+   +1,  0,  0, -1,
+    0, -1, +1,  0,
 };
 
 static bool button_state[NUM_BUTTONS] = { false, false, false, false };
@@ -87,6 +101,19 @@ static absolute_time_t button_debounce_until[NUM_BUTTONS];
 
 // Last reported 7-bit value per mux channel. 0xFF forces an initial send.
 static uint8_t mux_last_value[MUX_CHANNELS] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+
+// SysEx accumulator — used to receive control messages from the host (e.g.,
+// "reboot to BOOTSEL"). USB MIDI packs SysEx into 4-byte packets with CIN
+// nibbles 0x4-0x7, so we have to reassemble the inner byte stream.
+#define SYSEX_BUF_MAX 32
+static uint8_t sysex_buf[SYSEX_BUF_MAX];
+static uint8_t sysex_len = 0;
+
+// Magic SysEx: F0 7D 'O' 'D' 'J' 00 F7 → reboot to BOOTSEL.
+// Manufacturer ID 0x7D is reserved for non-commercial / educational use.
+static const uint8_t MAGIC_REBOOT[] = {
+    0xF0, 0x7D, 'O', 'D', 'J', 0x00, 0xF7,
+};
 
 // ===== MIDI send helpers =====
 
@@ -166,11 +193,79 @@ static void scan_mux(void) {
         sleep_us(MUX_SETTLE_US);
         uint16_t raw = adc_read();          // 0..4095 (12-bit)
         uint8_t value = (uint8_t) (raw >> 5); // 0..127 (7-bit)
-        if (value == mux_last_value[ch]) {
-            continue;
+
+        // Force the first reading through (last_value starts at 0xFF) so
+        // the host gets an initial position. After that, gate small
+        // changes via the deadband.
+        if (mux_last_value[ch] != 0xFF) {
+            int diff = (int) value - (int) mux_last_value[ch];
+            if (diff > -MUX_DEADBAND && diff < MUX_DEADBAND) {
+                continue;
+            }
         }
         mux_last_value[ch] = value;
         midi_send_cc(MIDI_CHANNEL, MUX_CC[ch], value);
+    }
+}
+
+// ===== MIDI input (SysEx → reboot) =====
+
+static void handle_sysex(const uint8_t* buf, uint8_t len) {
+    if (len == sizeof(MAGIC_REBOOT) &&
+        memcmp(buf, MAGIC_REBOOT, sizeof(MAGIC_REBOOT)) == 0) {
+        // Reboot straight into the bootloader (BOOTSEL mass storage mode).
+        // First arg = LED mask for activity (0 = use default), second = disable interfaces.
+        reset_usb_boot(0, 0);
+    }
+}
+
+static void handle_note(uint8_t note, bool on) {
+    // Mirror host's deck-state notes back onto button LEDs.
+    if (note == 40) {
+        gpio_put(PIN_LED_PLAY_A, on);
+    }
+}
+
+static void process_midi_packet(const uint8_t* packet) {
+    uint8_t cin = packet[0] & 0x0F;
+
+    // Note-on (0x9) / note-off (0x8) from host → button LEDs.
+    if (cin == 0x9) {
+        uint8_t note = packet[2];
+        uint8_t vel  = packet[3];
+        handle_note(note, vel > 0);
+        return;
+    }
+    if (cin == 0x8) {
+        handle_note(packet[2], false);
+        return;
+    }
+
+    // SysEx fragments — used for the reboot-to-BOOTSEL magic.
+    uint8_t take = 0;
+    switch (cin) {
+        case 0x4: take = 3; break;  // start / continue
+        case 0x5: take = 1; break;  // end with 1 byte
+        case 0x6: take = 2; break;  // end with 2 bytes
+        case 0x7: take = 3; break;  // end with 3 bytes
+        default:  return;            // ignore other CINs (CC etc. are device→host only)
+    }
+    for (uint8_t i = 1; i <= take && sysex_len < SYSEX_BUF_MAX; i++) {
+        sysex_buf[sysex_len++] = packet[i];
+    }
+    if (cin == 0x5 || cin == 0x6 || cin == 0x7) {
+        handle_sysex(sysex_buf, sysex_len);
+        sysex_len = 0;
+    }
+}
+
+static void drain_midi_input(void) {
+    while (tud_midi_available()) {
+        uint8_t packet[4];
+        if (!tud_midi_packet_read(packet)) {
+            break;
+        }
+        process_midi_packet(packet);
     }
 }
 
@@ -197,6 +292,10 @@ static void init_gpio(void) {
     gpio_init(PIN_MUX_S1); gpio_set_dir(PIN_MUX_S1, GPIO_OUT); gpio_put(PIN_MUX_S1, 0);
     gpio_init(PIN_MUX_S2); gpio_set_dir(PIN_MUX_S2, GPIO_OUT); gpio_put(PIN_MUX_S2, 0);
 
+    gpio_init(PIN_LED_PLAY_A);
+    gpio_set_dir(PIN_LED_PLAY_A, GPIO_OUT);
+    gpio_put(PIN_LED_PLAY_A, 0);
+
     // Seed the encoder's "previous" state from current pins to avoid a
     // spurious count on boot.
     uint8_t a = (uint8_t) gpio_get(PIN_ENC_A);
@@ -212,7 +311,7 @@ static void init_adc(void) {
 
 int main(void) {
     board_init();
-    tud_init(BOARD_TUD_RHPORT);
+    tusb_init();
     init_gpio();
     init_adc();
 
@@ -220,6 +319,7 @@ int main(void) {
 
     while (true) {
         tud_task();
+        drain_midi_input();
         encoder_poll();
 
         if (time_reached(next_scan)) {
