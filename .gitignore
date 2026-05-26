@@ -11,6 +11,17 @@ music/
 # Pico firmware build output
 hardware/firmware/build/
 
+# PCB netlist-generator venv + side-artifacts (skidl regenerates these each
+# run); the .py source and the .net netlist are committed.
+hardware/pcb/venv/
+hardware/pcb/__pycache__/
+hardware/pcb/*.erc
+hardware/pcb/*.log
+hardware/pcb/*_sklib.py
+/skidl.erc
+/skidl.log
+/skidl_sklib.py
+
 # Per-build controller config (hardware-specific; .example is committed)
 controls.toml
 

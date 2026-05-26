@@ -1,5 +1,11 @@
 # ODJ controller — prototype schematic (Deck A, Phase 1+2)
 
+> This documents the **Deck-A breadboard prototype** (what the firmware in
+> `firmware/` currently targets). The **two-deck PCB** — one Pico driving
+> both decks, all controls on plug-in headers — is generated from
+> [`pcb/odj_controller.py`](./pcb/odj_controller.py); see
+> [`pcb/README.md`](./pcb/README.md) for its pin map and BOM.
+
 Wiring for the first hardware build using:
 
 - Raspberry Pi Pico (RP2040)

@@ -3,16 +3,25 @@
 Firmware + wiring for a homebrew DJ controller around the Raspberry Pi
 Pico (RP2040). Companion to the [main project](../README.md).
 
-Phase 1 target: Deck A only — 1 jog encoder, 4 arcade buttons, 4 analog
-inputs (3 EQ + 1 volume fader) via a 74HC4051 mux.
+The **breadboard prototype** documented here is Deck A only — 1 jog
+encoder, 4 arcade buttons, 5 analog inputs (3-band EQ + volume + pitch)
+via a 74HC4051 mux — and is fully working.
+
+The **two-deck PCB** that supersedes this hand-wiring (one Pico driving
+*both* decks, everything on plug-in headers) lives in
+[`pcb/`](./pcb/) — see [`pcb/README.md`](./pcb/README.md). The firmware
+in `firmware/` still targets the Deck-A breadboard; extending it to the
+two-deck board is a pending task (see `../TODO.md`).
 
 Looks like a class-compliant USB MIDI device to the host. Plug it in and
 the existing app picks it up via `midir` the same way it does the LPD8.
 
 ## Files
 
-- [`SCHEMATIC.md`](./SCHEMATIC.md) — pin assignments, mux channel map,
-  wiring diagram, build order.
+- [`SCHEMATIC.md`](./SCHEMATIC.md) — Deck-A breadboard pin assignments,
+  mux channel map, wiring diagram, build order.
+- [`pcb/`](./pcb/) — two-deck carrier-board PCB, described in SKiDL
+  (`odj_controller.py` → KiCad netlist). See `pcb/README.md`.
 - [`firmware/`](./firmware/) — Pico SDK C project.
   - `CMakeLists.txt` — build configuration.
   - `src/main.c` — main loop: encoder polling, button debounce, mux
@@ -97,15 +106,14 @@ changes** to start with:
 | Button 3  | note 42                           | Deck A nudge − (while held) |
 | Button 4  | note 43                           | Deck A nudge + (while held) |
 | Mux ch 0 (EQ low)  | CC 4                     | Deck A EQ low               |
-| Mux ch 1 (EQ mid)  | CC 9                     | (no engine handler yet)     |
+| Mux ch 1 (EQ mid)  | CC 9                     | Deck A EQ mid               |
 | Mux ch 2 (EQ high) | CC 3                     | Deck A EQ high              |
 | Mux ch 3 (Volume)  | CC 2                     | Deck A gain                 |
 | Mux ch 4 (Pitch)   | CC 1                     | Deck A pitch                |
-| **Encoder**       | CC 16 (relative)                   | **no engine handler yet**   |
+| **Encoder**       | CC 16 (relative)                   | **Deck A jog** (nudge / scrub) |
 
-The encoder needs a handler in `src/midi.rs` on the app side — that's a
-next-session task. For now you can verify it via `aseqdump` that the CC
-values change as expected.
+The host handles all of the above: CC 16 drives the jog (nudge while
+playing, audible scrub while paused) and CC 9 the mid EQ band.
 
 ## Run the host app against the new device
 

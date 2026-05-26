@@ -105,9 +105,10 @@ priority order within each section.
   per-CC invert. Extend to CC→action remapping + note→action so a new
   controller can be configured without touching `src/midi.rs`.
 
-## Hardware build (this branch)
+## Hardware build
 
-See [`hardware/`](./hardware/) and the `hardware-prototype` branch.
+See [`hardware/`](./hardware/). (The `hardware-prototype` branch is merged
+into `main`.)
 
 - [x] Pico SDK firmware (encoder + buttons + mux ADC → USB MIDI).
 - [x] Schematic + build/flash docs.
@@ -126,10 +127,39 @@ See [`hardware/`](./hardware/) and the `hardware-prototype` branch.
 - [ ] **Capacitive jog touch** sensor on the platter top (cap-touch
   module or RC charge-time measurement). Required for proper scratch
   detection later.
-- [ ] **74HC165 button expansion** when we add the full performance
-  pad grid (>15 buttons).
 - [ ] **More LEDs.** Currently only the Play button. Cue, sync, etc.
   follow the same pattern.
+
+## Two-deck PCB
+
+The single-board carrier that drives **both decks** from one Pico. See
+[`hardware/pcb/`](./hardware/pcb/). Schematic/netlist is done; layout +
+firmware/host extension are pending.
+
+- [x] **Netlist** (`pcb/odj_controller.py`, SKiDL → KiCad). One Pico,
+  both decks, two 74HC4051 (shared select, GP26/GP27), 3 buttons/deck
+  (Play/Cue/🎧Cue), jog encoders, Play LEDs. Everything on plug-in
+  headers; all 8 channels of each mux + spare GPIO + an I2C expansion
+  header broken out. 37 components, 47 nets, generates clean.
+- [ ] **PCB layout + route** in KiCad → Gerbers → JLCPCB. 2-layer.
+- [ ] **Firmware: two decks.** Extend `firmware/src/main.c` to a 2nd
+  encoder (emit CC 17), a 2nd mux on GP27/ADC1, Deck B buttons (notes
+  36/37), a 2nd Play LED (GP21, lit by host note 36), and the two
+  headphone-cue buttons (notes 44 = Deck A, 45 = Deck B).
+- [ ] **Host: headphone-cue (PFL) buttons.** Map note 44 → toggle
+  `SetCueOn(A)`, note 45 → `SetCueOn(B)`, reading current state from
+  telemetry. (Engine + UI already have the toggle; just no MIDI binding.)
+- [ ] **Host: Deck B jog (CC 17).** Generalise the jog/scrub machinery
+  in `src/midi.rs` (currently Deck-A-only `JogState`) to both decks.
+- [ ] **Host: Deck B mid-EQ CC.** Deck B has low (CC 8) and high (CC 7)
+  but no mid; add a CC for the 2nd mux's mid channel.
+- [ ] **Multi-port MIDI input.** `midi::start` connects to one port;
+  open several so a cheap USB pad controller can drive hot-cues / FX
+  alongside the main board. (`Sender` is already cloneable.)
+- [ ] **Button-bank expansion** for a full pad grid: either an MCP23017
+  I/O expander on the I2C-EXP header, or a standalone USB-MIDI pad
+  controller (needs the multi-port input above). 74HC165 shift-register
+  scanning is a third option if pin-count ever forces it.
 
 ## Audio routing
 
