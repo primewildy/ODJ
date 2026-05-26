@@ -99,9 +99,11 @@ priority order within each section.
   v1 plan had a schema sketch — pick that up so different controllers
   can be added without code changes. Becomes more urgent as the hardware
   controller starts adding controls.
-- [ ] **EQ-mid in the engine.** The custom hardware has a 3-band EQ
-  (low/mid/high) but the engine only has 2-band shelves. Add a mid
-  peak filter (~1 kHz) and a `SetEqMid` command.
+- [x] **EQ-mid in the engine.** Added a 1 kHz peaking filter + SetEqMid;
+  mid knob (CC 9) drives it. Now a proper 3-band EQ.
+- [ ] **Full TOML control mapping.** `controls.toml` currently only does
+  per-CC invert. Extend to CC→action remapping + note→action so a new
+  controller can be configured without touching `src/midi.rs`.
 
 ## Hardware build (this branch)
 

@@ -7,6 +7,35 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
+use serde::Deserialize;
+
+/// Controller tweaks loaded from `controls.toml` in the working directory.
+/// Lets per-build hardware quirks (e.g. a backward-wired fader) be fixed
+/// without recompiling. Absent file → defaults (no inversion).
+#[derive(Deserialize, Default)]
+struct Controls {
+    /// MIDI CC numbers whose 0-127 value should be flipped.
+    #[serde(default)]
+    invert_cc: Vec<u8>,
+}
+
+fn load_controls() -> Controls {
+    match std::fs::read_to_string("controls.toml") {
+        Ok(s) => match toml::from_str::<Controls>(&s) {
+            Ok(c) => {
+                if !c.invert_cc.is_empty() {
+                    eprintln!("controls.toml: inverting CCs {:?}", c.invert_cc);
+                }
+                c
+            }
+            Err(e) => {
+                eprintln!("controls.toml parse error ({e}); using defaults");
+                Controls::default()
+            }
+        },
+        Err(_) => Controls::default(),
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "dj", about = "DJ controller — two decks, GUI + LPD8")]
@@ -54,7 +83,8 @@ fn main() -> Result<()> {
         "MIDI: disabled".to_string()
     } else {
         let tel_a = engine.telemetry(control::DeckId::A);
-        match midi::start(&cli.midi, sender.clone(), tel_a) {
+        let controls = load_controls();
+        match midi::start(&cli.midi, sender.clone(), tel_a, controls.invert_cc) {
             Ok(m) => {
                 eprintln!("midi: connected to {}", m.port_name);
                 // Keep alive for the whole program lifetime by leaking. Simpler

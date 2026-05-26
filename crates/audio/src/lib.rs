@@ -61,6 +61,7 @@ pub struct DeckTelemetry {
     pub pitch_lock: Arc<AtomicBool>,
     pub beat_align: Arc<AtomicBool>,
     pub eq_low_db: Arc<AtomicU32>,  // f32 bits
+    pub eq_mid_db: Arc<AtomicU32>,  // f32 bits
     pub eq_high_db: Arc<AtomicU32>, // f32 bits
     pub cue_on: Arc<AtomicBool>,
 }
@@ -76,6 +77,7 @@ impl DeckTelemetry {
             pitch_lock: Arc::new(AtomicBool::new(true)),
             beat_align: Arc::new(AtomicBool::new(true)),
             eq_low_db: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
+            eq_mid_db: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
             eq_high_db: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
             cue_on: Arc::new(AtomicBool::new(false)),
         }
@@ -104,6 +106,9 @@ impl DeckTelemetry {
     }
     pub fn current_eq_low_db(&self) -> f32 {
         f32::from_bits(self.eq_low_db.load(Ordering::Relaxed))
+    }
+    pub fn current_eq_mid_db(&self) -> f32 {
+        f32::from_bits(self.eq_mid_db.load(Ordering::Relaxed))
     }
     pub fn current_eq_high_db(&self) -> f32 {
         f32::from_bits(self.eq_high_db.load(Ordering::Relaxed))
@@ -312,10 +317,12 @@ struct DeckState {
     beat_align: bool,
     /// Per-deck phase vocoder. Always allocated; reset on pitch_lock toggle.
     pvoc: PhaseVocoder,
-    /// Stereo low-shelf and high-shelf EQ biquads.
+    /// Stereo low-shelf, mid-peaking, and high-shelf EQ biquads (in series).
     eq_low: Biquad,
+    eq_mid: Biquad,
     eq_high: Biquad,
     eq_low_db: f32,
+    eq_mid_db: f32,
     eq_high_db: f32,
     /// Engine sample rate (cached so EQ knob handlers can recompute coeffs).
     eq_sample_rate: f32,
@@ -343,8 +350,10 @@ impl DeckState {
             beat_align: true,
             pvoc: PhaseVocoder::new(2),
             eq_low: Biquad::passthrough(),
+            eq_mid: Biquad::passthrough(),
             eq_high: Biquad::passthrough(),
             eq_low_db: 0.0,
+            eq_mid_db: 0.0,
             eq_high_db: 0.0,
             eq_sample_rate: engine_rate as f32,
             play_envelope: 0.0,
@@ -516,6 +525,11 @@ impl Mixer {
                 deck.eq_low
                     .set_low_shelf(deck.eq_sample_rate, 250.0, deck.eq_low_db);
             }
+            DeckCommand::SetEqMid { db, .. } => {
+                deck.eq_mid_db = db.clamp(-25.0, 6.0);
+                deck.eq_mid
+                    .set_peaking(deck.eq_sample_rate, 1000.0, 0.7, deck.eq_mid_db);
+            }
             DeckCommand::SetEqHigh { db, .. } => {
                 deck.eq_high_db = db.clamp(-25.0, 6.0);
                 deck.eq_high
@@ -648,6 +662,7 @@ fn apply_eq(deck: &mut DeckState, buf: &mut [f32], out_channels: usize) {
         for ch in 0..stereo {
             let mut s = frame[ch];
             s = deck.eq_low.process(ch, s);
+            s = deck.eq_mid.process(ch, s);
             s = deck.eq_high.process(ch, s);
             frame[ch] = s;
         }
@@ -691,6 +706,8 @@ fn publish_telemetry(deck: &DeckState, tel: &DeckTelemetry) {
     tel.beat_align.store(deck.beat_align, Ordering::Relaxed);
     tel.eq_low_db
         .store(deck.eq_low_db.to_bits(), Ordering::Relaxed);
+    tel.eq_mid_db
+        .store(deck.eq_mid_db.to_bits(), Ordering::Relaxed);
     tel.eq_high_db
         .store(deck.eq_high_db.to_bits(), Ordering::Relaxed);
     tel.cue_on.store(deck.cue_on, Ordering::Relaxed);
@@ -919,6 +936,7 @@ fn cmd_target(cmd: &DeckCommand) -> DeckId {
         | DeckCommand::SetGain { deck, .. }
         | DeckCommand::SetPitchLock { deck, .. }
         | DeckCommand::SetEqLow { deck, .. }
+        | DeckCommand::SetEqMid { deck, .. }
         | DeckCommand::SetEqHigh { deck, .. }
         | DeckCommand::SetBeatAlign { deck, .. }
         | DeckCommand::SetCueOn { deck, .. }

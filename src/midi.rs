@@ -36,6 +36,7 @@
 //! doesn't move while nudge is held — base speed is what's published.
 //! (Sync via the UI button only.)
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
@@ -77,6 +78,11 @@ struct JogState {
 static JOG_EPOCH: OnceLock<Instant> = OnceLock::new();
 static JOG_STATE: OnceLock<Arc<JogState>> = OnceLock::new();
 
+/// CCs whose 0-127 value should be inverted, from controls.toml. Lets
+/// backward-wired faders/pots be flipped without a recompile. Set once
+/// at start(); empty if no config.
+static INVERT_CC: OnceLock<HashSet<u8>> = OnceLock::new();
+
 fn micros_since_epoch() -> u64 {
     let epoch = *JOG_EPOCH.get_or_init(Instant::now);
     Instant::now().saturating_duration_since(epoch).as_micros() as u64
@@ -96,7 +102,9 @@ pub fn start(
     port_filter: &str,
     sender: Sender,
     deck_a_tel: DeckTelemetry,
+    invert_cc: Vec<u8>,
 ) -> Result<MidiThread> {
+    let _ = INVERT_CC.set(invert_cc.into_iter().collect());
     // Lazy init the jog state + spawn the watchdog. Safe to call repeatedly;
     // OnceLock guards both. The watchdog runs forever and is detached.
     let jog_state = JOG_STATE
@@ -320,7 +328,26 @@ fn note_off(note: u8, sender: &Sender) {
     }
 }
 
-fn on_cc(cc: u8, val: u8, sender: &Sender) {
+fn on_cc(cc: u8, raw_val: u8, sender: &Sender) {
+    // Jog is a relative encoder — handle it before the invert step (which
+    // is for absolute pots/faders only).
+    if cc == JOG_CC_DECK_A {
+        on_jog(DeckId::A, raw_val, sender);
+        return;
+    }
+
+    // Flip the value for CCs listed in controls.toml (backward-wired
+    // faders/pots).
+    let val = if INVERT_CC
+        .get()
+        .map(|s| s.contains(&cc))
+        .unwrap_or(false)
+    {
+        127u8.saturating_sub(raw_val)
+    } else {
+        raw_val
+    };
+
     match cc {
         // Pitch (K1/K5): CC 64 = unity, ±8% range.
         1 => send_speed(DeckId::A, val, sender),
@@ -328,13 +355,12 @@ fn on_cc(cc: u8, val: u8, sender: &Sender) {
         // Volume (K2/K6): linear 0..127 → 0..1.
         2 => send_gain(DeckId::A, val, sender),
         6 => send_gain(DeckId::B, val, sender),
-        // EQ: K3 = A high, K4 = A low, K7 = B high, K8 = B low.
+        // EQ: K3 = A high, K4 = A low, K9 = A mid, K7 = B high, K8 = B low.
         3 => send_eq_high(DeckId::A, val, sender),
         4 => send_eq_low(DeckId::A, val, sender),
+        9 => send_eq_mid(DeckId::A, val, sender),
         7 => send_eq_high(DeckId::B, val, sender),
         8 => send_eq_low(DeckId::B, val, sender),
-        // Jog encoders (relative CC, see top-of-file note).
-        c if c == JOG_CC_DECK_A => on_jog(DeckId::A, val, sender),
         _ => {}
     }
 }
@@ -457,6 +483,12 @@ fn send_eq_high(deck: DeckId, cc: u8, sender: &Sender) {
 }
 fn send_eq_low(deck: DeckId, cc: u8, sender: &Sender) {
     let _ = sender.send(DeckCommand::SetEqLow {
+        deck,
+        db: cc_to_eq_db(cc),
+    });
+}
+fn send_eq_mid(deck: DeckId, cc: u8, sender: &Sender) {
+    let _ = sender.send(DeckCommand::SetEqMid {
         deck,
         db: cc_to_eq_db(cc),
     });

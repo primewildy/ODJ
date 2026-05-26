@@ -61,6 +61,17 @@ impl Biquad {
         self.a2 = c.a2;
     }
 
+    /// Replace coefficients with a peaking (bell) filter at fc. State
+    /// preserved. Used for the mid EQ band.
+    pub fn set_peaking(&mut self, fs: f32, fc: f32, q: f32, gain_db: f32) {
+        let c = peaking_coeffs(fs, fc, q, gain_db);
+        self.b0 = c.b0;
+        self.b1 = c.b1;
+        self.b2 = c.b2;
+        self.a1 = c.a1;
+        self.a2 = c.a2;
+    }
+
     /// DF2T per-sample. `ch` indexes stereo state (0 or 1).
     #[inline]
     pub fn process(&mut self, ch: usize, x: f32) -> f32 {
@@ -114,6 +125,30 @@ fn high_shelf_coeffs(fs: f32, fc: f32, gain_db: f32) -> Coeffs {
     let a0 = (a + 1.0) - (a - 1.0) * cw + two_sqrt_a_alpha;
     let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cw);
     let a2 = (a + 1.0) - (a - 1.0) * cw - two_sqrt_a_alpha;
+    Coeffs {
+        b0: b0 / a0,
+        b1: b1 / a0,
+        b2: b2 / a0,
+        a1: a1 / a0,
+        a2: a2 / a0,
+    }
+}
+
+fn peaking_coeffs(fs: f32, fc: f32, q: f32, gain_db: f32) -> Coeffs {
+    if gain_db.abs() < 0.01 {
+        return identity();
+    }
+    let a = 10f32.powf(gain_db / 40.0);
+    let w0 = 2.0 * PI * fc / fs;
+    let cw = w0.cos();
+    let sw = w0.sin();
+    let alpha = sw / (2.0 * q);
+    let b0 = 1.0 + alpha * a;
+    let b1 = -2.0 * cw;
+    let b2 = 1.0 - alpha * a;
+    let a0 = 1.0 + alpha / a;
+    let a1 = -2.0 * cw;
+    let a2 = 1.0 - alpha / a;
     Coeffs {
         b0: b0 / a0,
         b1: b1 / a0,

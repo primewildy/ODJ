@@ -853,6 +853,15 @@ fn deck_panel(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sender) 
         if r.changed() {
             let _ = sender.send(DeckCommand::SetEqLow { deck, db: low });
         }
+        let mut mid = d.telemetry.current_eq_mid_db();
+        let r = ui.add(
+            egui::Slider::new(&mut mid, -25.0..=6.0)
+                .text("mid")
+                .fixed_decimals(1),
+        );
+        if r.changed() {
+            let _ = sender.send(DeckCommand::SetEqMid { deck, db: mid });
+        }
         let mut high = d.telemetry.current_eq_high_db();
         let r = ui.add(
             egui::Slider::new(&mut high, -25.0..=6.0)

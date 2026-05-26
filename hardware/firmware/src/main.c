@@ -187,6 +187,11 @@ static inline void mux_select(uint8_t channel) {
     gpio_put(PIN_MUX_S2, (channel >> 2) & 1u);
 }
 
+// Set to 1 to stream every mux channel every scan, ignoring the
+// deadband — for bringing up / debugging the analog wiring. Revert to 0
+// for normal use.
+#define MUX_DEBUG 0
+
 static void scan_mux(void) {
     for (uint8_t ch = 0; ch < MUX_CHANNELS; ch++) {
         mux_select(ch);
@@ -194,6 +199,18 @@ static void scan_mux(void) {
         uint16_t raw = adc_read();          // 0..4095 (12-bit)
         uint8_t value = (uint8_t) (raw >> 5); // 0..127 (7-bit)
 
+#if MUX_DEBUG
+        // Stream the full mux→ADC path (deadband ignored) at ~20 Hz per
+        // channel so we can watch the pots/faders move.
+        static uint32_t dbg = 0;
+        if (ch == 0) {
+            dbg++;
+        }
+        if (dbg % 10 == 0) {
+            midi_send_cc(MIDI_CHANNEL, MUX_CC[ch], value);
+        }
+        continue;
+#else
         // Force the first reading through (last_value starts at 0xFF) so
         // the host gets an initial position. After that, gate small
         // changes via the deadband.
@@ -205,6 +222,7 @@ static void scan_mux(void) {
         }
         mux_last_value[ch] = value;
         midi_send_cc(MIDI_CHANNEL, MUX_CC[ch], value);
+#endif
     }
 }
 
@@ -305,6 +323,14 @@ static void init_gpio(void) {
 
 static void init_adc(void) {
     adc_init();
+#if MUX_DEBUG
+    // Enable the on-chip temperature sensor (ADC channel 4) so the debug
+    // build can prove the ADC core is converting at all, and init the
+    // other analog-capable GPIOs so we can probe them directly.
+    adc_set_temp_sensor_enabled(true);
+    adc_gpio_init(27);
+    adc_gpio_init(28);
+#endif
     adc_gpio_init(PIN_MUX_OUT);
     adc_select_input(ADC_INPUT);
 }

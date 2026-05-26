@@ -116,6 +116,8 @@ pub enum DeckCommand {
     SetPitchLock { deck: DeckId, on: bool },
     /// Low-shelf gain in dB. Typical -25..+6, 0 = flat. Shelf at 250 Hz.
     SetEqLow { deck: DeckId, db: f32 },
+    /// Mid peaking-filter gain in dB. Typical -25..+6, 0 = flat. ~1 kHz.
+    SetEqMid { deck: DeckId, db: f32 },
     /// High-shelf gain in dB. Typical -25..+6, 0 = flat. Shelf at 4 kHz.
     SetEqHigh { deck: DeckId, db: f32 },
     /// Match this deck's tempo to the OTHER deck's effective BPM. Clamped

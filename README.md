@@ -21,7 +21,8 @@ Built features:
 - Symphonia-based decode (mp3, flac, wav, aac/m4a).
 - Phase-vocoder key-lock (with identity phase-locking for cleaner highs)
   + vinyl-style coupled-pitch mode per deck.
-- 2-band shelving EQ per deck (low ≈250 Hz, high ≈4 kHz, ±25..+6 dB).
+- 3-band EQ per deck (low 250 Hz shelf, mid 1 kHz bell, high 4 kHz shelf,
+  ±25..+6 dB).
 - Per-deck play-envelope (5 ms fade) — no click on transitions.
 - BPM + beat-grid analysis (pure-Rust spectral flux + autocorr + brute
   force phase-aligned refinement, ~0.05 BPM precision).
@@ -64,6 +65,11 @@ Defaults:
   "ODJ Controller", so `--midi "ODJ Controller"` selects it.
 - `--music-dir music` (relative to CWD). Audio files in this directory
   (non-recursive) populate the in-app track list.
+
+Per-build controller quirks (e.g. a backward-wired fader) go in
+`controls.toml` in the working directory — see `controls.toml.example`.
+It's read at startup; currently supports `invert_cc = [...]` to flip
+specific MIDI CCs. Gitignored since it's hardware-specific.
 
 The first launch with a populated music directory will spend a few minutes
 in the background pre-analysing every track (BPM + beat grid + key).

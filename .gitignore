@@ -11,6 +11,9 @@ music/
 # Pico firmware build output
 hardware/firmware/build/
 
+# Per-build controller config (hardware-specific; .example is committed)
+controls.toml
+
 # Editor / OS
 .idea/
 .vscode/

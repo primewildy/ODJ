@@ -1,0 +1,13 @@
+# MIDI controller per-build tweaks. Copy to `controls.toml` and edit.
+# `controls.toml` is gitignored because it reflects how a specific
+# controller is wired (which faders read backward, etc.).
+#
+# invert_cc: MIDI CC numbers whose 0-127 value should be flipped, for
+# backward-wired faders / pots. CC map (LPD8 PROG-1 / ODJ Controller):
+#   1 = Deck A pitch    2 = Deck A volume
+#   3 = Deck A EQ-high  4 = Deck A EQ-low   9 = Deck A EQ-mid
+#   5 = Deck B pitch    6 = Deck B volume
+#   7 = Deck B EQ-high  8 = Deck B EQ-low
+#
+# Example: flip Deck A pitch + volume faders.
+invert_cc = [1, 2]
