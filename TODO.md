@@ -116,8 +116,9 @@ See [`hardware/`](./hardware/) and the `hardware-prototype` branch.
   at human spin rates.
 - [x] Bidirectional MIDI for Play-button LED feedback.
 - [x] Host-side encoder → nudge (playing) + audible scrub (paused).
-- [ ] **Wire remaining buttons, mux + pots, slide faders** per
-  SCHEMATIC.md.
+- [x] All Deck A controls wired + bring-up complete: jog encoder,
+  4 buttons, 3-band EQ + volume + pitch via the 74HC4051 mux. Full
+  0–127 range verified on every analog channel.
 - [ ] **PIO quadrature decoder.** Polled decoder is plenty fast for
   the 600 P/R encoder at human spin rates, but a PIO program would
   free the CPU and survive higher RPMs. Pico SDK has a reference

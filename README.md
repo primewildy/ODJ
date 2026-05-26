@@ -12,7 +12,9 @@ hardware controller (RP2040 / ESP32-S3) speaking USB MIDI.
 
 Working end-to-end as a two-deck mixing tool you can DJ a set on. Tested
 with an AKAI LPD8 as the dev controller against a library of ~550 mp3/flac
-tracks.
+tracks, and with a homebrew RP2040 controller (`hardware/`) whose Deck A
+side — jog wheel, transport buttons, 3-band EQ, volume + pitch faders,
+Play LED — is fully wired and working.
 
 Built features:
 - Two decks, cpal/PipeWire output at 128-frame buffers (~2.9 ms latency).
