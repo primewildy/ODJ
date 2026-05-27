@@ -41,10 +41,10 @@ set_default_tool(KICAD8)
 
 PASSIVE = Pin.types.PASSIVE
 
-# --- footprints: stock KiCad 10 libs, except FP_PICO, which is the project
-# footprint committed at odj.pretty/RPi_Pico_THT.kicad_mod (KiCad ships none) ---
+# --- footprints: stock KiCad 10 libs, plus two project footprints committed
+# in odj.pretty/ (the Pico and the CJMCU-4051 mux module — KiCad ships neither) ---
 FP_PICO = "odj:RPi_Pico_THT"
-FP_DIP16 = "Package_DIP:DIP-16_W7.62mm"
+FP_MUX = "odj:CJMCU_4051"
 FP_R = "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"
 FP_C = "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm"
 FP_CP = "Capacitor_THT:CP_Radial_D5.0mm_P2.50mm"
@@ -169,31 +169,32 @@ LED_B_PLAY_GP = Net("LED_B_PLAY_GP"); LED_B_PLAY_GP += pico[27]    # GP21  note 
 LED_B_HPCUE_GP = Net("LED_B_HPCUE_GP"); LED_B_HPCUE_GP += pico[12]  # GP9   note 45
 
 # ---------------------------------------------------------------------------
-# U2 / U3 — 74HC4051 analog muxes (DIP-16, by datasheet pin number)
+# U2 / U3 — CJMCU-4051 74HC4051 breakout modules (footprint odj:CJMCU_4051).
+# Pad map: channel row 1=VEE 2=VCC 3=GND 4..11=Y0..Y7; control row
+# 12=VEE 13=VCC 14=GND 15=Z 16=S0 17=S1 18=S2 19=E. VCC→3V3 (74HC, not HCT).
 # ---------------------------------------------------------------------------
 MUX_PINS = [
-    (1, "Y4"), (2, "Y6"), (3, "Z"), (4, "Y7"), (5, "Y5"),
-    (6, "E"), (7, "VEE"), (8, "VSS"), (9, "S2"), (10, "S1"),
-    (11, "S0"), (12, "Y3"), (13, "Y0"), (14, "Y1"), (15, "Y2"), (16, "VDD"),
+    (1, "VEE"), (2, "VCC"), (3, "GND"), (4, "Y0"), (5, "Y1"), (6, "Y2"),
+    (7, "Y3"), (8, "Y4"), (9, "Y5"), (10, "Y6"), (11, "Y7"),
+    (12, "VEE"), (13, "VCC"), (14, "GND"), (15, "Z"), (16, "S0"), (17, "S1"),
+    (18, "S2"), (19, "E"),
 ]
 
 
 def wire_mux(mux, z_net):
-    V3.connect(mux[16])              # VDD
-    GND.connect(mux[8], mux[7], mux[6])  # VSS, VEE, E (active-low enable on)
-    S0.connect(mux[11]); S1.connect(mux[10]); S2.connect(mux[9])
-    z_net += mux[3]
+    V3.connect(mux[2], mux[13])                            # VCC (both rows)
+    GND.connect(mux[3], mux[14], mux[1], mux[12], mux[19])  # GND, VEE×2, E (enable on)
+    S0.connect(mux[16]); S1.connect(mux[17]); S2.connect(mux[18])
+    z_net += mux[15]                                       # Z common → ADC
 
 
-muxA = make_ic("74HC4051", "U", FP_DIP16, MUX_PINS)
-muxB = make_ic("74HC4051", "U", FP_DIP16, MUX_PINS)
+muxA = make_ic("CJMCU_4051", "U", FP_MUX, MUX_PINS)
+muxB = make_ic("CJMCU_4051", "U", FP_MUX, MUX_PINS)
 wire_mux(muxA, MUXA_Z)
 wire_mux(muxB, MUXB_Z)
 
-# Channel wiper nets. Mux channel → Y-pin map (datasheet pin number):
-#   ch0=Y0=13  ch1=Y1=14  ch2=Y2=15  ch3=Y3=12
-#   ch4=Y4=1   ch5=Y5=5   ch6=Y6=2   ch7=Y7=4
-CH_YPIN = {0: 13, 1: 14, 2: 15, 3: 12, 4: 1, 5: 5, 6: 2, 7: 4}
+# Channel wiper nets. Mux channel → module pad (Y0..Y7 = pads 4..11):
+CH_YPIN = {0: 4, 1: 5, 2: 6, 3: 7, 4: 8, 5: 9, 6: 10, 7: 11}
 
 # Per-deck channel labels (matches firmware MUX_CC order). 5 used + 3 spare.
 CH_LABEL = {
@@ -271,9 +272,10 @@ led_chain(LED_B_PLAY_GP, "B_PLAY")
 led_chain(LED_B_HPCUE_GP, "B_HPCUE")
 
 # ---------------------------------------------------------------------------
-# Decoupling — 100nF at each mux VDD + at the Pico, plus a 10uF bulk.
+# Decoupling — 100nF on the 3V3 rail near each mux module (they self-bypass
+# too) + at the Pico, plus a 10uF bulk.
 # ---------------------------------------------------------------------------
-for _ in range(3):
+for _ in range(2):
     c = passive2("C", FP_C, "100nF")
     V3 += c[1]
     GND += c[2]

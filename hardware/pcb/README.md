@@ -4,9 +4,9 @@ A single-board carrier that drives **both decks** from one Raspberry Pi Pico.
 Everything off-board (pots, faders, buttons, encoders, LEDs) lands on **JST-XH**
 connectors — locking and polarised, so panel cables can't be plugged in
 backwards. Bench/expansion points (spare GPIO, I2C) use 2.54 mm pin headers for
-jumper wires and plug-in modules. The Pico itself **sockets onto two 1×20
-headers**. Nothing solders to the PCB except the connectors, the two mux DIPs,
-and the decoupling parts.
+jumper wires and plug-in modules. The Pico and the two **CJMCU-4051 mux
+modules** all socket onto headers — nothing solders to the PCB except the
+connectors and the decoupling parts.
 
 The board is described in code (`odj_controller.py`, using
 [SKiDL](https://github.com/devbisme/skidl)) and the KiCad netlist is generated
@@ -56,11 +56,11 @@ plenty.
    **Preferences → Configure Paths…** (they should be `/usr/share/kicad/...`).
    Then open the **PCB editor** (skip Eeschema; we import the netlist straight
    into the board).
-2. **Register this repo's footprint library.** KiCad ships no Pico module
-   footprint, so a clean one lives at `hardware/pcb/odj.pretty/`. In the PCB
-   editor: **Preferences → Manage Footprint Libraries → Project Specific Libraries**
-   (or Global) → add the path `…/hardware/pcb/odj.pretty` with nickname **`odj`**.
-   Now `odj:RPi_Pico_THT` resolves.
+2. **Register this repo's footprint library.** KiCad ships no Pico or
+   4051-module footprint, so clean ones live at `hardware/pcb/odj.pretty/`. In
+   the PCB editor: **Preferences → Manage Footprint Libraries → Project Specific
+   Libraries** (or Global) → add the path `…/hardware/pcb/odj.pretty` with
+   nickname **`odj`**. Now `odj:RPi_Pico_THT` and `odj:CJMCU_4051` resolve.
 3. **File → Import → Netlist…** → pick `odj_controller.net` → set *Link Method*
    to **reference designators** (SKiDL randomises the unique-id tstamps each
    regeneration, so refdes is the stable choice for re-imports) → *Update PCB*.
@@ -76,8 +76,9 @@ plenty.
 
 ## Layout tips that matter
 
-- **Decoupling close.** Put each 100 nF right at its mux's pin 16↔8, and one at
-  the Pico's 3V3↔GND. The 10 µF bulk near the 3V3 entry.
+- **Decoupling close.** Put a 100 nF on the 3V3 rail near each mux module's VCC
+  pin (the modules self-bypass too), and one at the Pico's 3V3↔GND. The 10 µF
+  bulk near the 3V3 entry.
 - **Don't filter the ADC line.** No cap on `MUXA_Z`/`MUXB_Z` — the firmware
   settles the mux in 5 µs, and a cap + the pot's ~10 kΩ source would smear one
   channel's reading into the next. Keep these two traces short instead, and
@@ -93,7 +94,7 @@ plenty.
 |-----|------|-------|
 | 1 | Raspberry Pi Pico | with male pin headers soldered on |
 | 2 | 1×20 female socket header | sockets the Pico (rows 0.7"/17.78 mm apart) |
-| 2 | 4051 8-ch mux, DIP-16 | **`74HC4051N`** — the HC family for 3.3 V (low Ron). `CD4051BE`/`HEF4051BP` are pin-compatible but 4000-series Ron ~doubles at 3.3 V — usable for the pots, but prefer HC (esp. for 14-bit pitch). + 2× DIP-16 sockets |
+| 2 | CJMCU-4051 74HC4051 mux module | already owned (30×19 mm). Socket each with an 8-way + 11-way female header strip, or solder it in. VCC → 3V3 (it's HC, not HCT). |
 | 2 | Rotary encoder, 600 P/R, NPN open-collector | jog wheels |
 | 8 | Illuminated arcade button, 24 mm | Play/Cue/🎧Cue/Sync × 2 decks |
 | 4 | Slide fader (10 kΩ) | pitch + volume × 2 decks |

@@ -137,11 +137,12 @@ The single-board carrier that drives **both decks** from one Pico. See
 firmware/host extension are pending.
 
 - [x] **Netlist** (`pcb/odj_controller.py`, SKiDL → KiCad). One Pico,
-  both decks, two 74HC4051 (shared select, GP26/GP27), 4 buttons/deck
-  (Play/Cue/🎧Cue/Sync), jog encoders, Play + 🎧Cue(PFL) LEDs per deck.
-  Panel controls on JST-XH; Pico sockets on two 1×20 headers; all 8 channels
-  of each mux + spare GPIO + an I2C expansion header broken out. All
-  footprints stock KiCad 10 (verified). 44 components, 49 nets, imports clean.
+  both decks, two CJMCU-4051 mux modules (74HC4051, shared select, GP26/GP27),
+  4 buttons/deck (Play/Cue/🎧Cue/Sync), jog encoders, Play + 🎧Cue(PFL) LEDs
+  per deck. Panel controls on JST-XH; Pico + mux modules socket on headers;
+  all 8 channels of each mux + spare GPIO + an I2C expansion header broken
+  out. Stock KiCad 10 footprints + two committed project footprints (Pico,
+  CJMCU-4051) in `odj.pretty/`. 42 components, 49 nets, imports clean.
 - [ ] **PCB layout + route** in KiCad → Gerbers → JLCPCB. 2-layer.
 - [ ] **Firmware: two decks.** Extend `firmware/src/main.c` to a 2nd
   encoder (emit CC 17), a 2nd mux on GP27/ADC1, Deck B buttons (notes
