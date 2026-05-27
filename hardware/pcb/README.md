@@ -1,9 +1,12 @@
 # ODJ controller PCB (two-deck carrier board)
 
 A single-board carrier that drives **both decks** from one Raspberry Pi Pico.
-Everything off-board (pots, faders, buttons, encoders, LEDs) lands on 2.54 mm
-pin headers, so the panel-mounted controls plug in — nothing solders to the
-PCB except the headers, the two mux DIPs, and the decoupling parts.
+Everything off-board (pots, faders, buttons, encoders, LEDs) lands on **JST-XH**
+connectors — locking and polarised, so panel cables can't be plugged in
+backwards. Bench/expansion points (spare GPIO, I2C) use 2.54 mm pin headers for
+jumper wires and plug-in modules. The Pico itself **sockets onto two 1×20
+headers**. Nothing solders to the PCB except the connectors, the two mux DIPs,
+and the decoupling parts.
 
 The board is described in code (`odj_controller.py`, using
 [SKiDL](https://github.com/devbisme/skidl)) and the KiCad netlist is generated
@@ -53,12 +56,16 @@ plenty.
    **Preferences → Configure Paths…** (they should be `/usr/share/kicad/...`).
    Then open the **PCB editor** (skip Eeschema; we import the netlist straight
    into the board).
-2. **File → Import → Netlist…** → pick `odj_controller.net` → *Update PCB*.
-   Footprints land in a heap with a ratsnest showing every connection.
-   - If U1 (the Pico) reports a missing footprint, pick it from the
-     `MCU_RaspberryPi` footprint library, or reassign U1 — e.g. to two
-     `PinHeader_1x20` sockets if you'd rather socket the Pico. Confirm the
-     exact name with `pacman -Fy && pacman -Fl kicad-library | grep -i pico`.
+2. **File → Import → Netlist…** → pick `odj_controller.net` → set *Link Method*
+   to **reference designators** (SKiDL randomises the unique-id tstamps each
+   regeneration, so refdes is the stable choice for re-imports) → *Update PCB*.
+   Footprints land in a heap with a ratsnest showing every connection. Every
+   footprint is a stock KiCad 10 part, so they all resolve — including the
+   Pico, which is two `PinHeader_1x20` sockets (`PICO-LEFT` / `PICO-RIGHT`)
+   rather than a Pico-specific footprint that KiCad doesn't ship.
+   - **Placing the Pico:** set the two 1×20 sockets 17.78 mm (0.7") apart,
+     same orientation (pin 1 at top on both), and a Pico with male headers
+     drops straight in.
 3. Draw the board outline, place parts (see layout tips below), route, add
    ground pours on both layers, run **DRC**.
 4. **File → Plot** Gerbers + **Generate Drill Files**, zip them, upload to
@@ -81,7 +88,8 @@ plenty.
 
 | Qty | Part | Notes |
 |-----|------|-------|
-| 1 | Raspberry Pi Pico | Pico H (pre-soldered headers) sockets nicely |
+| 1 | Raspberry Pi Pico | with male pin headers soldered on |
+| 2 | 1×20 female socket header | sockets the Pico (rows 0.7"/17.78 mm apart) |
 | 2 | 74HC4051 (DIP-16) | + 2× DIP-16 sockets |
 | 2 | Rotary encoder, 600 P/R, NPN open-collector | jog wheels |
 | 8 | Illuminated arcade button, 24 mm | Play/Cue/🎧Cue/Sync × 2 decks |
@@ -90,12 +98,15 @@ plenty.
 | 3 | Ceramic cap 100 nF | mux ×2 + Pico decoupling |
 | 1 | Electrolytic cap 10 µF | 3V3 bulk |
 | 4 | Resistor | 0 Ω link (arcade LED has its own R) or ~150 Ω for a bare LED |
-| 16 | 1×3 pin header | analog channels (8 per mux) |
-| 12 | 1×2 pin header | 8 buttons + 4 LEDs (Play + 🎧Cue × 2 decks) |
-| 3 | 1×4 pin header | 2 encoders + 1 I2C expansion |
+| 16 | JST-XH 1×3 (B3B-XH-A) | analog channels (8 per mux) |
+| 12 | JST-XH 1×2 (B2B-XH-A) | 8 buttons + 4 LEDs (Play + 🎧Cue × 2 decks) |
+| 2 | JST-XH 1×4 (B4B-XH-A) | jog encoders |
+| 1 | 1×4 pin header | I2C expansion |
 | 1 | 1×10 pin header | spare-GPIO breakout |
 
-Plus Dupont/JST jumper leads from the headers to the panel controls.
+Plus the JST-XH cable side: matching 2/3/4-way housings + crimp contacts (or
+pre-crimped leads) to wire each panel control back to its board connector —
+16× 3-way, 12× 2-way, 2× 4-way.
 
 ## Pin map (mirrors `hardware/firmware/src/main.c`)
 

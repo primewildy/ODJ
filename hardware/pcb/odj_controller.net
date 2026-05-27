@@ -2,7 +2,7 @@
   (version "D")
   (design
     (source "odj_controller.py")
-    (date "05/27/2026 08:33 AM")
+    (date "05/27/2026 08:50 AM")
     (tool "SKiDL (2.2.3)")
     (sheet
       (number 1)
@@ -55,16 +55,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "QI70bpTuEV")
+          (name "SKiDL Tag") "Py1bMzUnOe")
         (field
-          (name "SKiDL Line") "odj_controller.py:85"))
+          (name "SKiDL Line") "odj_controller.py:97"))
       (libsource
         (lib "NO_LIB")
         (part "100nF"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "91037e47-c7a4-5841-a928-85baf69b8f66"))
+      (tstamps "6fb0f52c-a6b5-5a20-b452-d58dd7e910b5"))
     (comp
       (ref "C2")
       (value "100nF")
@@ -78,16 +78,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "05SksemOHl")
+          (name "SKiDL Tag") "Z9iNCx0v09")
         (field
-          (name "SKiDL Line") "odj_controller.py:85"))
+          (name "SKiDL Line") "odj_controller.py:97"))
       (libsource
         (lib "NO_LIB")
         (part "100nF"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "fd794f21-b652-558f-a408-de0103639961"))
+      (tstamps "8a8e3327-6adc-5502-816d-3df8700c0dbc"))
     (comp
       (ref "C3")
       (value "100nF")
@@ -101,16 +101,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "k1vtdcz_XT")
+          (name "SKiDL Tag") "zc4QhDiAOz")
         (field
-          (name "SKiDL Line") "odj_controller.py:85"))
+          (name "SKiDL Line") "odj_controller.py:97"))
       (libsource
         (lib "NO_LIB")
         (part "100nF"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "f401b8cc-6b03-50f9-8be0-0c9ea2a2d200"))
+      (tstamps "15760063-2eb6-5abe-bfa8-9567a80d8006"))
     (comp
       (ref "C4")
       (value "10uF")
@@ -124,570 +124,616 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "hN7UlYuwhi")
+          (name "SKiDL Tag") "lp60WA4GXp")
         (field
-          (name "SKiDL Line") "odj_controller.py:85"))
+          (name "SKiDL Line") "odj_controller.py:97"))
       (libsource
         (lib "NO_LIB")
         (part "10uF"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "78206078-e260-5cf7-a837-d6a74aa19ed0"))
+      (tstamps "0f70bf00-6517-5b06-8b38-45d016b4104a"))
     (comp
       (ref "J1")
-      (value "A-EQ_LOW")
+      (value "PICO-LEFT")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x20_P2.54mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x20_P2.54mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "4uP3zqDRrI")
+          (name "SKiDL Tag") "e_gr6g8D1F")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:117"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "Header_1x20"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "bc0b058c-5f76-5189-901b-240840052b7e"))
+      (tstamps "69decba8-21ca-5747-b6f5-42428ea717a4"))
     (comp
       (ref "J10")
-      (value "B-EQ_MID")
+      (value "A-SPARE7")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "cndPMs6ilC")
+          (name "SKiDL Tag") "e_tRXrO8MR")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "98f5ef42-a895-5be6-a27a-215d443e3d56"))
+      (tstamps "6b6ab3ad-6829-5400-b014-dc029496ac36"))
     (comp
       (ref "J11")
-      (value "B-EQ_HIGH")
+      (value "B-EQ_LOW")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "YaEa1UQeBh")
+          (name "SKiDL Tag") "jg2Re994XU")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "10e3898a-7858-5efa-961d-1afb25df4efc"))
+      (tstamps "8fb5049e-f271-5b27-8ef5-02431b650ec7"))
     (comp
       (ref "J12")
-      (value "B-VOLUME")
+      (value "B-EQ_MID")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "sJW5tgtrlI")
+          (name "SKiDL Tag") "0tq75i9KSJ")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "6c2569bf-d3e6-5271-a60a-3703b1778855"))
+      (tstamps "e3783962-0c0e-5ac0-a4e0-0cc08741fc1d"))
     (comp
       (ref "J13")
-      (value "B-PITCH")
+      (value "B-EQ_HIGH")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "vKGXYckEmF")
+          (name "SKiDL Tag") "64mgU_J7WN")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "951cb630-0385-5d43-97bc-986243b5cf7b"))
+      (tstamps "8dc4d1d5-9942-593e-ab4c-50966354db07"))
     (comp
       (ref "J14")
-      (value "B-SPARE5")
+      (value "B-VOLUME")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "nyQWChfh37")
+          (name "SKiDL Tag") "_MRrAeE4lc")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "87a1d020-7acd-5d85-b2e4-04a4ce4c2d38"))
+      (tstamps "c8bbb040-0d88-5767-b3d8-2ed3d500be0d"))
     (comp
       (ref "J15")
-      (value "B-SPARE6")
+      (value "B-PITCH")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "CAxkPBTwVG")
+          (name "SKiDL Tag") "6CIN4dr4tJ")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "824e1568-1b37-5ac2-8a8c-fb6f64dc8ba1"))
+      (tstamps "bfb09039-9167-5d17-8abe-16fd10357997"))
     (comp
       (ref "J16")
-      (value "B-SPARE7")
+      (value "B-SPARE5")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "xm6ELI62ff")
+          (name "SKiDL Tag") "q058BdoRpA")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "e91f46c8-e663-50ec-b83c-2814ea9ff2d2"))
+      (tstamps "d32a00b3-e309-5470-aedb-e1782c403ff1"))
     (comp
       (ref "J17")
-      (value "A-PLAY")
+      (value "B-SPARE6")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "8aJ42k1Ngc")
+          (name "SKiDL Tag") "6Pj1nr0Zwt")
         (field
-          (name "SKiDL Line") "odj_controller.py:206"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x02"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "62bb3c25-08e2-53c5-9f3f-7a49fa61970e"))
+      (tstamps "5e6ea606-c7df-54ee-b29f-5f719aa4616f"))
     (comp
       (ref "J18")
-      (value "A-CUE")
+      (value "B-SPARE7")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "WvwVR7FqZo")
+          (name "SKiDL Tag") "rhBRfg9ueZ")
         (field
-          (name "SKiDL Line") "odj_controller.py:206"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x02"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "a752eeb3-f322-55fd-ab47-972f1ee99ca2"))
+      (tstamps "b6218f29-e816-52f9-a3f8-64d635f9b2eb"))
     (comp
       (ref "J19")
-      (value "A-HPCUE")
+      (value "A-PLAY")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "YqcMlqbnSj")
+          (name "SKiDL Tag") "toiwB_pJqd")
         (field
-          (name "SKiDL Line") "odj_controller.py:206"))
+          (name "SKiDL Line") "odj_controller.py:220"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x02"))
+        (part "JST_XH_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "c945c9ec-b1d5-5710-8105-469e983e2102"))
+      (tstamps "92be980e-9efd-5d78-860b-abdc896e3b6d"))
     (comp
       (ref "J2")
-      (value "A-EQ_MID")
+      (value "PICO-RIGHT")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x20_P2.54mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x20_P2.54mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "nIgAq_Dps3")
+          (name "SKiDL Tag") "jSzQofu63E")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:118"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "Header_1x20"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "f709854e-e7ab-5215-a28d-d51093d69a75"))
+      (tstamps "90316845-dd40-591f-9b98-0e7632bc4885"))
     (comp
       (ref "J20")
-      (value "B-PLAY")
+      (value "A-CUE")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "DxJfDW3EYT")
+          (name "SKiDL Tag") "SDjCtLWiBv")
         (field
-          (name "SKiDL Line") "odj_controller.py:206"))
+          (name "SKiDL Line") "odj_controller.py:220"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x02"))
+        (part "JST_XH_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "c45a0cf0-6c21-57dc-988e-6d342b384f1a"))
+      (tstamps "25efbcbc-1551-52f6-95a2-3ed36a32bc93"))
     (comp
       (ref "J21")
-      (value "B-CUE")
+      (value "A-HPCUE")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "y5AM_cvT9a")
+          (name "SKiDL Tag") "6Xa5gX9jX6")
         (field
-          (name "SKiDL Line") "odj_controller.py:206"))
+          (name "SKiDL Line") "odj_controller.py:220"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x02"))
+        (part "JST_XH_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "89599746-f00d-5645-be64-1497ab6f543b"))
+      (tstamps "e64e2ff7-5bef-5614-b93a-d9eb7148d086"))
     (comp
       (ref "J22")
-      (value "B-HPCUE")
+      (value "B-PLAY")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "_rOwXGgt37")
+          (name "SKiDL Tag") "kj0e4MN5n2")
         (field
-          (name "SKiDL Line") "odj_controller.py:206"))
+          (name "SKiDL Line") "odj_controller.py:220"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x02"))
+        (part "JST_XH_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "c7b5a357-ec07-5075-a1c0-d3126094c845"))
+      (tstamps "f91bb94a-8e14-5073-bb91-582ab8bf6c8f"))
     (comp
       (ref "J23")
-      (value "A-SYNC")
+      (value "B-CUE")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "SQBZz1NIX0")
+          (name "SKiDL Tag") "bxuMVEddba")
         (field
-          (name "SKiDL Line") "odj_controller.py:206"))
+          (name "SKiDL Line") "odj_controller.py:220"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x02"))
+        (part "JST_XH_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "17eb8562-4237-5948-8f52-42beedd010d8"))
+      (tstamps "c96c7a52-1611-55d2-9360-3fc9963c9dde"))
     (comp
       (ref "J24")
-      (value "B-SYNC")
+      (value "B-HPCUE")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "xYWz3JA0ax")
+          (name "SKiDL Tag") "Dh0r0gzNu7")
         (field
-          (name "SKiDL Line") "odj_controller.py:206"))
+          (name "SKiDL Line") "odj_controller.py:220"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x02"))
+        (part "JST_XH_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "cfca1d20-de2a-5cfb-8be7-df516d9a9461"))
+      (tstamps "a016af1e-5eef-5244-8357-c1ab50ea55aa"))
     (comp
       (ref "J25")
-      (value "A-ENCODER")
+      (value "A-SYNC")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "3uhV0zPWhY")
+          (name "SKiDL Tag") "PEPngoX0C6")
         (field
-          (name "SKiDL Line") "odj_controller.py:224"))
+          (name "SKiDL Line") "odj_controller.py:220"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x04"))
+        (part "JST_XH_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "7680782f-8bc5-5e8c-a9c8-f4031beaa67f"))
+      (tstamps "ff637380-fcdd-5ffb-b1dc-3f7cb9ce499d"))
     (comp
       (ref "J26")
-      (value "B-ENCODER")
+      (value "B-SYNC")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "GwY7PZ5Gdn")
+          (name "SKiDL Tag") "KX4EBxV9UC")
         (field
-          (name "SKiDL Line") "odj_controller.py:224"))
+          (name "SKiDL Line") "odj_controller.py:220"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x04"))
+        (part "JST_XH_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "06d5c6dc-fb36-5de1-8b8b-f4b7c83dba32"))
+      (tstamps "58dadb80-be5a-530c-a9d5-91dcc16c94c7"))
     (comp
       (ref "J27")
-      (value "A_PLAY-LED")
+      (value "A-ENCODER")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B4B-XH-A_1x04_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B4B-XH-A_1x04_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "XudRhKUmIE")
+          (name "SKiDL Tag") "W_ks3EPru5")
         (field
-          (name "SKiDL Line") "odj_controller.py:244"))
+          (name "SKiDL Line") "odj_controller.py:238"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x02"))
+        (part "JST_XH_1x04"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "8c535a0f-290e-5ddb-9005-111ce055daad"))
+      (tstamps "8e42be07-4233-51ae-944f-49e3aef609ff"))
     (comp
       (ref "J28")
-      (value "A_HPCUE-LED")
+      (value "B-ENCODER")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B4B-XH-A_1x04_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B4B-XH-A_1x04_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "6mhLV8CScW")
+          (name "SKiDL Tag") "1CQvqznB0x")
         (field
-          (name "SKiDL Line") "odj_controller.py:244"))
+          (name "SKiDL Line") "odj_controller.py:238"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x02"))
+        (part "JST_XH_1x04"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "8b213908-3e82-5cd3-8302-47001336fd75"))
+      (tstamps "c25dc20f-393f-53b6-ba11-35d1d9d40032"))
     (comp
       (ref "J29")
-      (value "B_PLAY-LED")
+      (value "A_PLAY-LED")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "iA1lGMDLAD")
+          (name "SKiDL Tag") "Q2CRkk2uo6")
         (field
-          (name "SKiDL Line") "odj_controller.py:244"))
+          (name "SKiDL Line") "odj_controller.py:258"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x02"))
+        (part "JST_XH_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "094913d6-3a0b-5333-b1e7-fdb800cfc9b8"))
+      (tstamps "3a36a59b-65f9-585c-b4cc-a64f4be3823a"))
     (comp
       (ref "J3")
-      (value "A-EQ_HIGH")
+      (value "A-EQ_LOW")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "pDNeqO9K7S")
+          (name "SKiDL Tag") "vcv0fHUnKo")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "3aaab0a7-6080-5e10-86a3-2d8246ce0290"))
+      (tstamps "54974d88-f765-5650-af14-62aa573c2313"))
     (comp
       (ref "J30")
-      (value "B_HPCUE-LED")
+      (value "A_HPCUE-LED")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "PNjXTmBwXY")
+          (name "SKiDL Tag") "GF3kczPSkZ")
         (field
-          (name "SKiDL Line") "odj_controller.py:244"))
+          (name "SKiDL Line") "odj_controller.py:258"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x02"))
+        (part "JST_XH_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "81c29c1f-8b54-5fbc-a135-154e327c33f4"))
+      (tstamps "e5f67739-f59a-50ae-a7eb-22aa46276edd"))
     (comp
       (ref "J31")
+      (value "B_PLAY-LED")
+      (description "")
+      (footprint "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
+      (fields
+        (field
+          (name "Description"))
+        (field
+          (name "Footprint") "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "sdg9pHPHfd")
+        (field
+          (name "SKiDL Line") "odj_controller.py:258"))
+      (libsource
+        (lib "NO_LIB")
+        (part "JST_XH_1x02"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "dbe696bd-92b9-57ce-8ec0-a5833aad8fc3"))
+    (comp
+      (ref "J32")
+      (value "B_HPCUE-LED")
+      (description "")
+      (footprint "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
+      (fields
+        (field
+          (name "Description"))
+        (field
+          (name "Footprint") "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "H76QLxgBO5")
+        (field
+          (name "SKiDL Line") "odj_controller.py:258"))
+      (libsource
+        (lib "NO_LIB")
+        (part "JST_XH_1x02"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "5837ca5c-d347-575d-8566-5b57bc2eab8a"))
+    (comp
+      (ref "J33")
       (value "SPARE-GPIO")
       (description "")
       (footprint "Connector_PinHeader_2.54mm:PinHeader_1x10_P2.54mm_Vertical")
@@ -699,18 +745,18 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "X0DsKtCNyM")
+          (name "SKiDL Tag") "zQO6ulEfc0")
         (field
-          (name "SKiDL Line") "odj_controller.py:269"))
+          (name "SKiDL Line") "odj_controller.py:283"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x10"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "1b5cbf20-1cfb-50d6-9de8-6c66d8a2d00c"))
+      (tstamps "84c18b32-3e6d-59d6-9fa4-44bce4c5970b"))
     (comp
-      (ref "J32")
+      (ref "J34")
       (value "I2C-EXP")
       (description "")
       (footprint "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical")
@@ -722,269 +768,269 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "tbCpIpq4Dv")
+          (name "SKiDL Tag") "0TBGImkoSq")
         (field
-          (name "SKiDL Line") "odj_controller.py:297"))
+          (name "SKiDL Line") "odj_controller.py:311"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x04"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "9ebb076b-7a95-538c-b5fc-d257d4db4877"))
+      (tstamps "0bb640e5-12c6-5258-811e-5dc17eebcbaa"))
     (comp
       (ref "J4")
-      (value "A-VOLUME")
+      (value "A-EQ_MID")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "Ct2ApsuPSv")
+          (name "SKiDL Tag") "8kK9pkOIuC")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "ce41e339-edbf-5f6c-8e6c-38fb642779b2"))
+      (tstamps "ec6afa76-94b7-5cf4-ad37-bd85bf86bb8a"))
     (comp
       (ref "J5")
-      (value "A-PITCH")
+      (value "A-EQ_HIGH")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "FkzFAKn0S8")
+          (name "SKiDL Tag") "X6WUUb4bbt")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "b403d909-601f-5226-8e61-1dc83057fd20"))
+      (tstamps "4924b8ae-f293-5e2b-be2f-a71f3c8e32f3"))
     (comp
       (ref "J6")
-      (value "A-SPARE5")
+      (value "A-VOLUME")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "VDt_ioG8yX")
+          (name "SKiDL Tag") "rYYlfUs1LR")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "3a5c582c-002d-5cc6-89ea-d30863a85ad3"))
+      (tstamps "5891e2bc-9811-52eb-a858-59a9f36ce279"))
     (comp
       (ref "J7")
-      (value "A-SPARE6")
+      (value "A-PITCH")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "MGXsxJ3LOm")
+          (name "SKiDL Tag") "VFZ3NXq1KI")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "5995890f-6d78-51cd-b9d7-f48d70d54862"))
+      (tstamps "c7780e06-0e83-54e9-a740-a78f98ec5f10"))
     (comp
       (ref "J8")
-      (value "A-SPARE7")
+      (value "A-SPARE5")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "aYXoqFC3Zm")
+          (name "SKiDL Tag") "Sm3AycY29L")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "8512357d-d22f-5cfd-bbfb-ce8d16a11c25"))
+      (tstamps "4e069c33-fbe4-57dd-9d28-a06758a2584a"))
     (comp
       (ref "J9")
-      (value "B-EQ_LOW")
+      (value "A-SPARE6")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+      (footprint "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical")
+          (name "Footprint") "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "B4tMm88xfK")
+          (name "SKiDL Tag") "2joL0Q_UJi")
         (field
-          (name "SKiDL Line") "odj_controller.py:193"))
+          (name "SKiDL Line") "odj_controller.py:207"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x03"))
+        (part "JST_XH_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "2140e36b-e6c3-5ba2-b46f-bf25c5695a36"))
+      (tstamps "7519966c-6242-54c4-86c8-d5494c91852e"))
     (comp
       (ref "R1")
       (value "0R")
       (description "")
-      (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm")
+      (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm")
+          (name "Footprint") "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "hHonDrpRos")
+          (name "SKiDL Tag") "9H_iLsHzdF")
         (field
-          (name "SKiDL Line") "odj_controller.py:85"))
+          (name "SKiDL Line") "odj_controller.py:97"))
       (libsource
         (lib "NO_LIB")
         (part "0R"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "1e32bc78-80aa-5699-b3a7-63ee5510df11"))
+      (tstamps "86c74b08-f7e2-5100-ad36-8f7c291c5184"))
     (comp
       (ref "R2")
       (value "0R")
       (description "")
-      (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm")
+      (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm")
+          (name "Footprint") "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "QxInxkX3pL")
+          (name "SKiDL Tag") "BO4kxJkaDf")
         (field
-          (name "SKiDL Line") "odj_controller.py:85"))
+          (name "SKiDL Line") "odj_controller.py:97"))
       (libsource
         (lib "NO_LIB")
         (part "0R"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "6aad46ad-3470-5a17-9f0a-c962e3d6e086"))
+      (tstamps "91c74ff4-9f72-583c-aa7b-dd8df4de5fd6"))
     (comp
       (ref "R3")
       (value "0R")
       (description "")
-      (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm")
+      (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm")
+          (name "Footprint") "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "i7K1lTXzdg")
+          (name "SKiDL Tag") "MkeJhWjw5X")
         (field
-          (name "SKiDL Line") "odj_controller.py:85"))
+          (name "SKiDL Line") "odj_controller.py:97"))
       (libsource
         (lib "NO_LIB")
         (part "0R"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "ca58ec0e-efb6-5cdf-8b8d-b64f740de0b0"))
+      (tstamps "9e746a00-561a-56ef-99ee-c014ad12bc20"))
     (comp
       (ref "R4")
       (value "0R")
       (description "")
-      (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm")
+      (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm")
+          (name "Footprint") "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "Haa754p1eQ")
+          (name "SKiDL Tag") "de55EjMcjo")
         (field
-          (name "SKiDL Line") "odj_controller.py:85"))
+          (name "SKiDL Line") "odj_controller.py:97"))
       (libsource
         (lib "NO_LIB")
         (part "0R"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "f7933829-5702-5a44-8a85-35531aa776bd"))
+      (tstamps "28644b82-8440-5674-ac7d-12442f201cec"))
     (comp
       (ref "U1")
-      (value "RaspberryPi_Pico")
+      (value "74HC4051")
       (description "")
-      (footprint "MCU_RaspberryPi:RPi_Pico_SMD_TH")
+      (footprint "Package_DIP:DIP-16_W7.62mm")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "MCU_RaspberryPi:RPi_Pico_SMD_TH")
+          (name "Footprint") "Package_DIP:DIP-16_W7.62mm")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "tBlnJtMNZQ")
+          (name "SKiDL Tag") "VRNDeZVsaV")
         (field
-          (name "SKiDL Line") "odj_controller.py:63"))
+          (name "SKiDL Line") "odj_controller.py:70"))
       (libsource
         (lib "NO_LIB")
-        (part "RaspberryPi_Pico"))
+        (part "74HC4051"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "7dd4d655-719c-586e-a062-8489b733bcc3"))
+      (tstamps "4633f31b-82ff-5023-9a6a-129bc1217445"))
     (comp
       (ref "U2")
       (value "74HC4051")
@@ -998,39 +1044,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "OaeYl3Vwr3")
+          (name "SKiDL Tag") "XEP53N5OGT")
         (field
-          (name "SKiDL Line") "odj_controller.py:63"))
+          (name "SKiDL Line") "odj_controller.py:70"))
       (libsource
         (lib "NO_LIB")
         (part "74HC4051"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "bf7e432b-2173-5dde-8bef-71673d9d7299"))
-    (comp
-      (ref "U3")
-      (value "74HC4051")
-      (description "")
-      (footprint "Package_DIP:DIP-16_W7.62mm")
-      (fields
-        (field
-          (name "Description"))
-        (field
-          (name "Footprint") "Package_DIP:DIP-16_W7.62mm")
-        (field
-          (name "Datasheet"))
-        (field
-          (name "SKiDL Tag") "mGtfjF_eIC")
-        (field
-          (name "SKiDL Line") "odj_controller.py:63"))
-      (libsource
-        (lib "NO_LIB")
-        (part "74HC4051"))
-      (sheetpath
-        (names "/")
-        (tstamps "/"))
-      (tstamps "b6498150-b50b-54b1-abe8-b3ae5763620d")))
+      (tstamps "1f85db08-b858-5b3f-b645-d8c802a79c79")))
   (nets
     (net
       (code 1)
@@ -1053,10 +1076,6 @@
         (pin "1")
         (pintype "PASSIVE"))
       (node
-        (ref "J1")
-        (pin "1")
-        (pintype "PASSIVE"))
-      (node
         (ref "J10")
         (pin "1")
         (pintype "PASSIVE"))
@@ -1085,23 +1104,31 @@
         (pin "1")
         (pintype "PASSIVE"))
       (node
-        (ref "J2")
+        (ref "J17")
         (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J18")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J2")
+        (pin "5")
         (pintype "PASSIVE"))
       (node
         (ref "J3")
         (pin "1")
         (pintype "PASSIVE"))
       (node
-        (ref "J31")
+        (ref "J33")
         (pin "1")
         (pintype "PASSIVE"))
       (node
-        (ref "J31")
+        (ref "J33")
         (pin "10")
         (pintype "PASSIVE"))
       (node
-        (ref "J32")
+        (ref "J34")
         (pin "1")
         (pintype "PASSIVE"))
       (node
@@ -1130,14 +1157,10 @@
         (pintype "PASSIVE"))
       (node
         (ref "U1")
-        (pin "36")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U2")
         (pin "16")
         (pintype "PASSIVE"))
       (node
-        (ref "U3")
+        (ref "U2")
         (pin "16")
         (pintype "PASSIVE")))
     (net
@@ -1145,31 +1168,31 @@
       (name "+5V")
       (class "Default")
       (node
-        (ref "J25")
+        (ref "J2")
         (pin "1")
         (pintype "PASSIVE"))
       (node
-        (ref "J26")
+        (ref "J27")
         (pin "1")
         (pintype "PASSIVE"))
       (node
-        (ref "J31")
+        (ref "J28")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J33")
         (pin "2")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U1")
-        (pin "40")
         (pintype "PASSIVE")))
     (net
       (code 3)
       (name "AN_A0_EQ_LOW")
       (class "Default")
       (node
-        (ref "J1")
+        (ref "J3")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U2")
+        (ref "U1")
         (pin "13")
         (pintype "PASSIVE")))
     (net
@@ -1177,11 +1200,11 @@
       (name "AN_A1_EQ_MID")
       (class "Default")
       (node
-        (ref "J2")
+        (ref "J4")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U2")
+        (ref "U1")
         (pin "14")
         (pintype "PASSIVE")))
     (net
@@ -1189,11 +1212,11 @@
       (name "AN_A2_EQ_HIGH")
       (class "Default")
       (node
-        (ref "J3")
+        (ref "J5")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U2")
+        (ref "U1")
         (pin "15")
         (pintype "PASSIVE")))
     (net
@@ -1201,11 +1224,11 @@
       (name "AN_A3_VOLUME")
       (class "Default")
       (node
-        (ref "J4")
+        (ref "J6")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U2")
+        (ref "U1")
         (pin "12")
         (pintype "PASSIVE")))
     (net
@@ -1213,11 +1236,11 @@
       (name "AN_A4_PITCH")
       (class "Default")
       (node
-        (ref "J5")
+        (ref "J7")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U2")
+        (ref "U1")
         (pin "1")
         (pintype "PASSIVE")))
     (net
@@ -1225,11 +1248,11 @@
       (name "AN_A5_SPARE5")
       (class "Default")
       (node
-        (ref "J6")
+        (ref "J8")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U2")
+        (ref "U1")
         (pin "5")
         (pintype "PASSIVE")))
     (net
@@ -1237,11 +1260,11 @@
       (name "AN_A6_SPARE6")
       (class "Default")
       (node
-        (ref "J7")
+        (ref "J9")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U2")
+        (ref "U1")
         (pin "2")
         (pintype "PASSIVE")))
     (net
@@ -1249,11 +1272,11 @@
       (name "AN_A7_SPARE7")
       (class "Default")
       (node
-        (ref "J8")
+        (ref "J10")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U2")
+        (ref "U1")
         (pin "4")
         (pintype "PASSIVE")))
     (net
@@ -1261,11 +1284,11 @@
       (name "AN_B0_EQ_LOW")
       (class "Default")
       (node
-        (ref "J9")
+        (ref "J11")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U3")
+        (ref "U2")
         (pin "13")
         (pintype "PASSIVE")))
     (net
@@ -1273,11 +1296,11 @@
       (name "AN_B1_EQ_MID")
       (class "Default")
       (node
-        (ref "J10")
+        (ref "J12")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U3")
+        (ref "U2")
         (pin "14")
         (pintype "PASSIVE")))
     (net
@@ -1285,11 +1308,11 @@
       (name "AN_B2_EQ_HIGH")
       (class "Default")
       (node
-        (ref "J11")
+        (ref "J13")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U3")
+        (ref "U2")
         (pin "15")
         (pintype "PASSIVE")))
     (net
@@ -1297,11 +1320,11 @@
       (name "AN_B3_VOLUME")
       (class "Default")
       (node
-        (ref "J12")
+        (ref "J14")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U3")
+        (ref "U2")
         (pin "12")
         (pintype "PASSIVE")))
     (net
@@ -1309,11 +1332,11 @@
       (name "AN_B4_PITCH")
       (class "Default")
       (node
-        (ref "J13")
+        (ref "J15")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U3")
+        (ref "U2")
         (pin "1")
         (pintype "PASSIVE")))
     (net
@@ -1321,11 +1344,11 @@
       (name "AN_B5_SPARE5")
       (class "Default")
       (node
-        (ref "J14")
+        (ref "J16")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U3")
+        (ref "U2")
         (pin "5")
         (pintype "PASSIVE")))
     (net
@@ -1333,11 +1356,11 @@
       (name "AN_B6_SPARE6")
       (class "Default")
       (node
-        (ref "J15")
+        (ref "J17")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U3")
+        (ref "U2")
         (pin "2")
         (pintype "PASSIVE")))
     (net
@@ -1345,11 +1368,11 @@
       (name "AN_B7_SPARE7")
       (class "Default")
       (node
-        (ref "J16")
+        (ref "J18")
         (pin "2")
         (pintype "PASSIVE"))
       (node
-        (ref "U3")
+        (ref "U2")
         (pin "4")
         (pintype "PASSIVE")))
     (net
@@ -1357,144 +1380,144 @@
       (name "BTN_A_CUE")
       (class "Default")
       (node
-        (ref "J18")
-        (pin "1")
+        (ref "J1")
+        (pin "15")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "15")
+        (ref "J20")
+        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 20)
       (name "BTN_A_HPCUE")
       (class "Default")
       (node
-        (ref "J19")
-        (pin "1")
+        (ref "J1")
+        (pin "16")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "16")
+        (ref "J21")
+        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 21)
       (name "BTN_A_PLAY")
       (class "Default")
       (node
-        (ref "J17")
-        (pin "1")
+        (ref "J1")
+        (pin "14")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "14")
+        (ref "J19")
+        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 22)
       (name "BTN_A_SYNC")
       (class "Default")
       (node
-        (ref "J23")
-        (pin "1")
+        (ref "J1")
+        (pin "4")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "4")
+        (ref "J25")
+        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 23)
       (name "BTN_B_CUE")
       (class "Default")
       (node
-        (ref "J21")
-        (pin "1")
+        (ref "J2")
+        (pin "16")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "25")
+        (ref "J23")
+        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 24)
       (name "BTN_B_HPCUE")
       (class "Default")
       (node
-        (ref "J22")
-        (pin "1")
+        (ref "J2")
+        (pin "15")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "26")
+        (ref "J24")
+        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 25)
       (name "BTN_B_PLAY")
       (class "Default")
       (node
-        (ref "J20")
-        (pin "1")
+        (ref "J1")
+        (pin "17")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "17")
+        (ref "J22")
+        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 26)
       (name "BTN_B_SYNC")
       (class "Default")
       (node
-        (ref "J24")
-        (pin "1")
+        (ref "J1")
+        (pin "5")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "5")
+        (ref "J26")
+        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 27)
       (name "ENCA_A")
       (class "Default")
       (node
-        (ref "J25")
-        (pin "2")
+        (ref "J1")
+        (pin "19")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "19")
+        (ref "J27")
+        (pin "2")
         (pintype "PASSIVE")))
     (net
       (code 28)
       (name "ENCA_B")
       (class "Default")
       (node
-        (ref "J25")
-        (pin "3")
+        (ref "J1")
+        (pin "20")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "20")
+        (ref "J27")
+        (pin "3")
         (pintype "PASSIVE")))
     (net
       (code 29)
       (name "ENCB_A")
       (class "Default")
       (node
-        (ref "J26")
-        (pin "2")
+        (ref "J2")
+        (pin "20")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "21")
+        (ref "J28")
+        (pin "2")
         (pintype "PASSIVE")))
     (net
       (code 30)
       (name "ENCB_B")
       (class "Default")
       (node
-        (ref "J26")
-        (pin "3")
+        (ref "J2")
+        (pin "19")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "22")
+        (ref "J28")
+        (pin "3")
         (pintype "PASSIVE")))
     (net
       (code 31)
@@ -1518,7 +1541,19 @@
         (pintype "PASSIVE"))
       (node
         (ref "J1")
+        (pin "13")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "18")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
         (pin "3")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J1")
+        (pin "8")
         (pintype "PASSIVE"))
       (node
         (ref "J10")
@@ -1550,11 +1585,11 @@
         (pintype "PASSIVE"))
       (node
         (ref "J17")
-        (pin "2")
+        (pin "3")
         (pintype "PASSIVE"))
       (node
         (ref "J18")
-        (pin "2")
+        (pin "3")
         (pintype "PASSIVE"))
       (node
         (ref "J19")
@@ -1562,7 +1597,19 @@
         (pintype "PASSIVE"))
       (node
         (ref "J2")
+        (pin "13")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J2")
+        (pin "18")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J2")
         (pin "3")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J2")
+        (pin "8")
         (pintype "PASSIVE"))
       (node
         (ref "J20")
@@ -1586,19 +1633,19 @@
         (pintype "PASSIVE"))
       (node
         (ref "J25")
-        (pin "4")
+        (pin "2")
         (pintype "PASSIVE"))
       (node
         (ref "J26")
-        (pin "4")
+        (pin "2")
         (pintype "PASSIVE"))
       (node
         (ref "J27")
-        (pin "2")
+        (pin "4")
         (pintype "PASSIVE"))
       (node
         (ref "J28")
-        (pin "2")
+        (pin "4")
         (pintype "PASSIVE"))
       (node
         (ref "J29")
@@ -1614,14 +1661,22 @@
         (pintype "PASSIVE"))
       (node
         (ref "J31")
-        (pin "3")
-        (pintype "PASSIVE"))
-      (node
-        (ref "J31")
-        (pin "9")
+        (pin "2")
         (pintype "PASSIVE"))
       (node
         (ref "J32")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J33")
+        (pin "3")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J33")
+        (pin "9")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J34")
         (pin "4")
         (pintype "PASSIVE"))
       (node
@@ -1650,31 +1705,11 @@
         (pintype "PASSIVE"))
       (node
         (ref "U1")
-        (pin "13")
+        (pin "6")
         (pintype "PASSIVE"))
       (node
         (ref "U1")
-        (pin "18")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U1")
-        (pin "23")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U1")
-        (pin "28")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U1")
-        (pin "3")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U1")
-        (pin "33")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U1")
-        (pin "38")
+        (pin "7")
         (pintype "PASSIVE"))
       (node
         (ref "U1")
@@ -1690,18 +1725,6 @@
         (pintype "PASSIVE"))
       (node
         (ref "U2")
-        (pin "8")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U3")
-        (pin "6")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U3")
-        (pin "7")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U3")
         (pin "8")
         (pintype "PASSIVE")))
     (net
@@ -1709,7 +1732,7 @@
       (name "LED_A_HPCUE")
       (class "Default")
       (node
-        (ref "J28")
+        (ref "J30")
         (pin "1")
         (pintype "PASSIVE"))
       (node
@@ -1721,19 +1744,19 @@
       (name "LED_A_HPCUE_GP")
       (class "Default")
       (node
-        (ref "R2")
-        (pin "1")
+        (ref "J2")
+        (pin "12")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "29")
+        (ref "R2")
+        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 34)
       (name "LED_A_PLAY")
       (class "Default")
       (node
-        (ref "J27")
+        (ref "J29")
         (pin "1")
         (pintype "PASSIVE"))
       (node
@@ -1745,19 +1768,19 @@
       (name "LED_A_PLAY_GP")
       (class "Default")
       (node
-        (ref "R1")
-        (pin "1")
+        (ref "J2")
+        (pin "17")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "24")
+        (ref "R1")
+        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 36)
       (name "LED_B_HPCUE")
       (class "Default")
       (node
-        (ref "J30")
+        (ref "J32")
         (pin "1")
         (pintype "PASSIVE"))
       (node
@@ -1769,19 +1792,19 @@
       (name "LED_B_HPCUE_GP")
       (class "Default")
       (node
-        (ref "R4")
-        (pin "1")
+        (ref "J1")
+        (pin "12")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "12")
+        (ref "R4")
+        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 38)
       (name "LED_B_PLAY")
       (class "Default")
       (node
-        (ref "J29")
+        (ref "J31")
         (pin "1")
         (pintype "PASSIVE"))
       (node
@@ -1793,23 +1816,23 @@
       (name "LED_B_PLAY_GP")
       (class "Default")
       (node
-        (ref "R3")
-        (pin "1")
+        (ref "J2")
+        (pin "14")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "27")
+        (ref "R3")
+        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 40)
       (name "MUXA_Z")
       (class "Default")
       (node
-        (ref "U1")
-        (pin "31")
+        (ref "J2")
+        (pin "10")
         (pintype "PASSIVE"))
       (node
-        (ref "U2")
+        (ref "U1")
         (pin "3")
         (pintype "PASSIVE")))
     (net
@@ -1817,11 +1840,11 @@
       (name "MUXB_Z")
       (class "Default")
       (node
-        (ref "U1")
-        (pin "32")
+        (ref "J2")
+        (pin "9")
         (pintype "PASSIVE"))
       (node
-        (ref "U3")
+        (ref "U2")
         (pin "3")
         (pintype "PASSIVE")))
     (net
@@ -1829,15 +1852,15 @@
       (name "MUX_S0")
       (class "Default")
       (node
-        (ref "U1")
+        (ref "J1")
         (pin "9")
         (pintype "PASSIVE"))
       (node
-        (ref "U2")
+        (ref "U1")
         (pin "11")
         (pintype "PASSIVE"))
       (node
-        (ref "U3")
+        (ref "U2")
         (pin "11")
         (pintype "PASSIVE")))
     (net
@@ -1845,15 +1868,15 @@
       (name "MUX_S1")
       (class "Default")
       (node
+        (ref "J1")
+        (pin "10")
+        (pintype "PASSIVE"))
+      (node
         (ref "U1")
         (pin "10")
         (pintype "PASSIVE"))
       (node
         (ref "U2")
-        (pin "10")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U3")
         (pin "10")
         (pintype "PASSIVE")))
     (net
@@ -1861,15 +1884,15 @@
       (name "MUX_S2")
       (class "Default")
       (node
-        (ref "U1")
+        (ref "J1")
         (pin "11")
         (pintype "PASSIVE"))
       (node
-        (ref "U2")
+        (ref "U1")
         (pin "9")
         (pintype "PASSIVE"))
       (node
-        (ref "U3")
+        (ref "U2")
         (pin "9")
         (pintype "PASSIVE")))
     (net
@@ -1877,55 +1900,55 @@
       (name "SP_GP0")
       (class "Default")
       (node
-        (ref "J31")
+        (ref "J1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J33")
         (pin "4")
         (pintype "PASSIVE"))
       (node
-        (ref "J32")
+        (ref "J34")
         (pin "2")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U1")
-        (pin "1")
         (pintype "PASSIVE")))
     (net
       (code 46)
       (name "SP_GP1")
       (class "Default")
       (node
-        (ref "J31")
+        (ref "J1")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J33")
         (pin "5")
         (pintype "PASSIVE"))
       (node
-        (ref "J32")
+        (ref "J34")
         (pin "3")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U1")
-        (pin "2")
         (pintype "PASSIVE")))
     (net
       (code 47)
       (name "SP_GP28")
       (class "Default")
       (node
-        (ref "J31")
-        (pin "8")
+        (ref "J2")
+        (pin "7")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
-        (pin "34")
+        (ref "J33")
+        (pin "8")
         (pintype "PASSIVE")))
     (net
       (code 48)
       (name "SP_GP4")
       (class "Default")
       (node
-        (ref "J31")
+        (ref "J1")
         (pin "6")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
+        (ref "J33")
         (pin "6")
         (pintype "PASSIVE")))
     (net
@@ -1933,10 +1956,10 @@
       (name "SP_GP5")
       (class "Default")
       (node
-        (ref "J31")
+        (ref "J1")
         (pin "7")
         (pintype "PASSIVE"))
       (node
-        (ref "U1")
+        (ref "J33")
         (pin "7")
         (pintype "PASSIVE")))))
