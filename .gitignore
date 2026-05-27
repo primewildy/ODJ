@@ -22,6 +22,15 @@ hardware/pcb/*_sklib.py
 /skidl.log
 /skidl_sklib.py
 
+# KiCad project housekeeping (backups, caches, per-user local settings).
+# The project files (.kicad_pro/.kicad_pcb/.kicad_sch) can still be committed.
+*-backups/
+*.kicad_pcb-bak
+*.kicad_sch-bak
+*.kicad_prl
+fp-info-cache
+*~
+
 # Per-build controller config (hardware-specific; .example is committed)
 controls.toml
 
