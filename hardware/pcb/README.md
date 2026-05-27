@@ -11,8 +11,8 @@ from it. The script is the source of truth; the `.net` file is a build
 artifact (regenerate it, don't hand-edit).
 
 ```
-USB ── Pico ─┬─ Deck A: jog encoder, 3 buttons, Play LED, mux A (GP26/ADC0)
-             └─ Deck B: jog encoder, 3 buttons, Play LED, mux B (GP27/ADC1)
+USB ── Pico ─┬─ Deck A: jog encoder, 4 buttons, Play+🎧Cue LEDs, mux A (GP26/ADC0)
+             └─ Deck B: jog encoder, 4 buttons, Play+🎧Cue LEDs, mux B (GP27/ADC1)
              shared mux select S0/S1/S2 (GP6/7/8)
 ```
 
@@ -84,16 +84,16 @@ plenty.
 | 1 | Raspberry Pi Pico | Pico H (pre-soldered headers) sockets nicely |
 | 2 | 74HC4051 (DIP-16) | + 2× DIP-16 sockets |
 | 2 | Rotary encoder, 600 P/R, NPN open-collector | jog wheels |
-| 6 | Illuminated arcade button, 24 mm | Play/Cue/🎧Cue × 2 decks |
+| 8 | Illuminated arcade button, 24 mm | Play/Cue/🎧Cue/Sync × 2 decks |
 | 4 | Slide fader (10 kΩ) | pitch + volume × 2 decks |
 | 6 | Rotary pot B10K | 3-band EQ × 2 decks |
 | 3 | Ceramic cap 100 nF | mux ×2 + Pico decoupling |
 | 1 | Electrolytic cap 10 µF | 3V3 bulk |
 | 4 | Resistor | 0 Ω link (arcade LED has its own R) or ~150 Ω for a bare LED |
 | 16 | 1×3 pin header | analog channels (8 per mux) |
-| 10 | 1×2 pin header | 6 buttons + 4 LEDs (Play + Cue × 2 decks) |
+| 12 | 1×2 pin header | 8 buttons + 4 LEDs (Play + 🎧Cue × 2 decks) |
 | 3 | 1×4 pin header | 2 encoders + 1 I2C expansion |
-| 1 | 1×12 pin header | spare-GPIO breakout |
+| 1 | 1×10 pin header | spare-GPIO breakout |
 
 Plus Dupont/JST jumper leads from the headers to the panel controls.
 
@@ -116,10 +116,16 @@ Keep this and the firmware in sync.
 | Deck B Play btn | GP13 | 17 | B-PLAY (note 36) |
 | Deck B Cue btn | GP19 | 25 | B-CUE (note 37) |
 | Deck B 🎧Cue btn | GP20 | 26 | B-HPCUE (note 45) |
+| Deck A Sync btn | GP2 | 4 | A-SYNC (note 46) |
+| Deck B Sync btn | GP3 | 5 | B-SYNC (note 47) |
 | Deck A Play LED | GP18 | 24 | A_PLAY-LED via R1 (host note 40) |
-| Deck A Cue LED | GP22 | 29 | A_CUE-LED via R2 (host note 41) |
+| Deck A 🎧Cue LED (PFL) | GP22 | 29 | A_HPCUE-LED via R2 (host note 44) |
 | Deck B Play LED | GP21 | 27 | B_PLAY-LED via R3 (host note 36) |
-| Deck B Cue LED | GP9 | 12 | B_CUE-LED via R4 (host note 37) |
+| Deck B 🎧Cue LED (PFL) | GP9 | 12 | B_HPCUE-LED via R4 (host note 45) |
+
+The 🎧Cue LED is a **PFL indicator** — lit while that deck is routed to the
+headphones, not tied to the transport-cue point. The transport-Cue button
+(notes 41 / 37) has no Pico-driven LED.
 
 Both muxes use the same channel layout (channel = `S2 S1 S0`):
 
