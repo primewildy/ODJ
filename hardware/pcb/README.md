@@ -39,13 +39,26 @@ The schematic capture is done (it's the netlist). The remaining work — placing
 parts and routing copper — is the visual part KiCad is for. A 2-layer board is
 plenty.
 
-1. Install **KiCad 8**. New project → open the **PCB editor** (you can skip
-   Eeschema entirely; we import the netlist straight into the board).
+1. Install **KiCad (10.x)** *and its library package* — the footprints and
+   symbols are a separate ~370 MB package. On Arch this bites everyone:
+
+   ```
+   sudo pacman -S kicad kicad-library kicad-library-3d
+   ```
+
+   Installing `kicad` alone leaves `/usr/share/kicad/{symbols,footprints}`
+   empty and every library "missing". KiCad provides sane defaults for the
+   `KICAD10_FOOTPRINT_DIR` / `KICAD10_SYMBOL_DIR` path variables internally;
+   if a stale `~/.config/kicad` from an older version points them wrong, check
+   **Preferences → Configure Paths…** (they should be `/usr/share/kicad/...`).
+   Then open the **PCB editor** (skip Eeschema; we import the netlist straight
+   into the board).
 2. **File → Import → Netlist…** → pick `odj_controller.net` → *Update PCB*.
    Footprints land in a heap with a ratsnest showing every connection.
-   - If U1 (the Pico) reports a missing footprint, enable the
-     `MCU_RaspberryPi` footprint library (ships with KiCad 8) or reassign U1 —
-     e.g. to two `PinHeader_1x20` sockets if you'd rather socket the Pico.
+   - If U1 (the Pico) reports a missing footprint, pick it from the
+     `MCU_RaspberryPi` footprint library, or reassign U1 — e.g. to two
+     `PinHeader_1x20` sockets if you'd rather socket the Pico. Confirm the
+     exact name with `pacman -Fy && pacman -Fl kicad-library | grep -i pico`.
 3. Draw the board outline, place parts (see layout tips below), route, add
    ground pours on both layers, run **DRC**.
 4. **File → Plot** Gerbers + **Generate Drill Files**, zip them, upload to
@@ -76,11 +89,11 @@ plenty.
 | 6 | Rotary pot B10K | 3-band EQ × 2 decks |
 | 3 | Ceramic cap 100 nF | mux ×2 + Pico decoupling |
 | 1 | Electrolytic cap 10 µF | 3V3 bulk |
-| 2 | Resistor | 0 Ω link (arcade LED has its own R) or ~150 Ω for a bare LED |
+| 4 | Resistor | 0 Ω link (arcade LED has its own R) or ~150 Ω for a bare LED |
 | 16 | 1×3 pin header | analog channels (8 per mux) |
-| 8 | 1×2 pin header | 6 buttons + 2 Play LEDs |
+| 10 | 1×2 pin header | 6 buttons + 4 LEDs (Play + Cue × 2 decks) |
 | 3 | 1×4 pin header | 2 encoders + 1 I2C expansion |
-| 1 | 1×14 pin header | spare-GPIO breakout |
+| 1 | 1×12 pin header | spare-GPIO breakout |
 
 Plus Dupont/JST jumper leads from the headers to the panel controls.
 
@@ -103,8 +116,10 @@ Keep this and the firmware in sync.
 | Deck B Play btn | GP13 | 17 | B-PLAY (note 36) |
 | Deck B Cue btn | GP19 | 25 | B-CUE (note 37) |
 | Deck B 🎧Cue btn | GP20 | 26 | B-HPCUE (note 45) |
-| Deck A Play LED | GP18 | 24 | A-LED via R1 (host note 40) |
-| Deck B Play LED | GP21 | 27 | B-LED via R2 (host note 36) |
+| Deck A Play LED | GP18 | 24 | A_PLAY-LED via R1 (host note 40) |
+| Deck A Cue LED | GP22 | 29 | A_CUE-LED via R2 (host note 41) |
+| Deck B Play LED | GP21 | 27 | B_PLAY-LED via R3 (host note 36) |
+| Deck B Cue LED | GP9 | 12 | B_CUE-LED via R4 (host note 37) |
 
 Both muxes use the same channel layout (channel = `S2 S1 S0`):
 

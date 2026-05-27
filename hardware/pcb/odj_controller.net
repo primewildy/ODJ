@@ -2,7 +2,7 @@
   (version "D")
   (design
     (source "odj_controller.py")
-    (date "05/26/2026 11:52 PM")
+    (date "05/27/2026 08:19 AM")
     (tool "SKiDL (2.2.3)")
     (sheet
       (number 1)
@@ -55,7 +55,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "SGs2Z5IbVe")
+          (name "SKiDL Tag") "usrhaFthTh")
         (field
           (name "SKiDL Line") "odj_controller.py:85"))
       (libsource
@@ -64,7 +64,7 @@
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "d3181414-93db-5c2c-b364-a87e3a005cb8"))
+      (tstamps "2f0dd7b9-6bc6-5fac-aec6-947d3d077bcc"))
     (comp
       (ref "C2")
       (value "100nF")
@@ -78,7 +78,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "zCKQzNCCTU")
+          (name "SKiDL Tag") "ronhMdGiZ9")
         (field
           (name "SKiDL Line") "odj_controller.py:85"))
       (libsource
@@ -87,7 +87,7 @@
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "4a38ccc3-16b4-522e-9c42-91179793e686"))
+      (tstamps "311f91b5-fe83-5a29-a0e5-da56441487cf"))
     (comp
       (ref "C3")
       (value "100nF")
@@ -101,7 +101,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "fx5dh8yUB4")
+          (name "SKiDL Tag") "MZPIDwfuyW")
         (field
           (name "SKiDL Line") "odj_controller.py:85"))
       (libsource
@@ -110,7 +110,7 @@
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "188f24ab-8e5f-57c4-819a-6e4dac7baca6"))
+      (tstamps "38286761-1538-5d43-a0fb-857591c1259c"))
     (comp
       (ref "C4")
       (value "10uF")
@@ -124,7 +124,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "bbN9UgxTGv")
+          (name "SKiDL Tag") "dH9XFhmCnM")
         (field
           (name "SKiDL Line") "odj_controller.py:85"))
       (libsource
@@ -133,7 +133,7 @@
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "24303989-5ebd-5fc1-948f-ac9dc75404e4"))
+      (tstamps "23f6c05b-ff46-5a22-bd49-f353f21b7caa"))
     (comp
       (ref "J1")
       (value "A-EQ_LOW")
@@ -147,16 +147,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "vrR6AhriLf")
+          (name "SKiDL Tag") "P0CZo2Ew4a")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "e1f27135-6da9-5008-875a-19e5b6ef5d36"))
+      (tstamps "20f4e05a-b34f-51a0-a506-7156242a4bb3"))
     (comp
       (ref "J10")
       (value "B-EQ_MID")
@@ -170,16 +170,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "F2jYsHjMog")
+          (name "SKiDL Tag") "hxoYd4RUgF")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "d66c29aa-bb92-54f1-a2fb-e3424193c5a2"))
+      (tstamps "f47eeb2d-24d6-53fc-aa4e-33f31008140d"))
     (comp
       (ref "J11")
       (value "B-EQ_HIGH")
@@ -193,16 +193,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "57yGWkkG28")
+          (name "SKiDL Tag") "Mr5DlpWvND")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "08227ea0-cc96-52a7-a397-72f4c3d71afe"))
+      (tstamps "69a67fc3-a6f4-5a6d-afef-726a6975624e"))
     (comp
       (ref "J12")
       (value "B-VOLUME")
@@ -216,16 +216,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "xSSc7Ck3Xp")
+          (name "SKiDL Tag") "0YYtmnjvZL")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "942142cf-5e62-516b-8a01-d65d11df3480"))
+      (tstamps "e9c7dd83-7853-50cf-a043-975eba98c4f6"))
     (comp
       (ref "J13")
       (value "B-PITCH")
@@ -239,16 +239,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "NBpWS1a_za")
+          (name "SKiDL Tag") "wmYCHFNgoW")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "a85ced3b-8ab5-5fa0-a1d4-68820502a788"))
+      (tstamps "0f316bc1-c083-5970-b4e0-f5dd43afd2ca"))
     (comp
       (ref "J14")
       (value "B-SPARE5")
@@ -262,16 +262,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "YawxySFksQ")
+          (name "SKiDL Tag") "JbHKv8iUap")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "b2d774a9-d65f-520f-b930-d8308f0f2599"))
+      (tstamps "aa6190d8-5154-5736-ba25-1f80c926d280"))
     (comp
       (ref "J15")
       (value "B-SPARE6")
@@ -285,16 +285,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "B0OXxpy8ma")
+          (name "SKiDL Tag") "FN6_YeCbhP")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "084dbaf6-12e2-5fe4-8c56-3b8e7cf1ddef"))
+      (tstamps "25a67c27-1a76-527b-bf4c-0828f8973dcc"))
     (comp
       (ref "J16")
       (value "B-SPARE7")
@@ -308,16 +308,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "6pbpFktAPK")
+          (name "SKiDL Tag") "XLju2kY_Wc")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "6b6992f0-eee1-553b-b508-e42b4fd9fc9b"))
+      (tstamps "9b359558-06c2-5d0d-8906-4fec8e50ea60"))
     (comp
       (ref "J17")
       (value "A-PLAY")
@@ -331,16 +331,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "drrzXKYvKK")
+          (name "SKiDL Tag") "TLVLAd4C3y")
         (field
-          (name "SKiDL Line") "odj_controller.py:198"))
+          (name "SKiDL Line") "odj_controller.py:201"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "a95642f0-343d-5673-8a6c-d23b99c85f5c"))
+      (tstamps "dfa80cfe-1ecc-57db-90c9-620ee57c3981"))
     (comp
       (ref "J18")
       (value "A-CUE")
@@ -354,16 +354,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "uzRBdzztI0")
+          (name "SKiDL Tag") "OWfXX5WNho")
         (field
-          (name "SKiDL Line") "odj_controller.py:198"))
+          (name "SKiDL Line") "odj_controller.py:201"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "eeb94ef3-66fb-52c0-a8b1-effb8ba6c826"))
+      (tstamps "3e8955bd-39d4-5cf9-bdfa-e5edafcde526"))
     (comp
       (ref "J19")
       (value "A-HPCUE")
@@ -377,16 +377,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "ispdU2BxQF")
+          (name "SKiDL Tag") "Y0hbo2xL3l")
         (field
-          (name "SKiDL Line") "odj_controller.py:198"))
+          (name "SKiDL Line") "odj_controller.py:201"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "9f6ab3ba-e394-559c-ac04-a9eea6c95a7a"))
+      (tstamps "92ea27de-51b0-5925-880e-daa5d93d1136"))
     (comp
       (ref "J2")
       (value "A-EQ_MID")
@@ -400,16 +400,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "9DWZoYNf4V")
+          (name "SKiDL Tag") "YHY9Flz1ZN")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "163074df-b4cb-5361-a678-aff98ebd87a1"))
+      (tstamps "41298e5b-e1fb-5dcc-93b9-3abac47caf97"))
     (comp
       (ref "J20")
       (value "B-PLAY")
@@ -423,16 +423,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "b3IXZjQrtj")
+          (name "SKiDL Tag") "knXt5EUxri")
         (field
-          (name "SKiDL Line") "odj_controller.py:198"))
+          (name "SKiDL Line") "odj_controller.py:201"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "e2582431-3a69-5e9e-98a2-e3758455f2eb"))
+      (tstamps "8066ed54-2951-5b3e-8bc3-d2577fcf0f9b"))
     (comp
       (ref "J21")
       (value "B-CUE")
@@ -446,16 +446,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "l5tet24nav")
+          (name "SKiDL Tag") "H1f1uUYSaF")
         (field
-          (name "SKiDL Line") "odj_controller.py:198"))
+          (name "SKiDL Line") "odj_controller.py:201"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "b9e69f55-2322-568a-9ee4-f34cbbe4dea7"))
+      (tstamps "0aeb0fff-57de-5fb6-8b2d-f82c7f9d2efb"))
     (comp
       (ref "J22")
       (value "B-HPCUE")
@@ -469,16 +469,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "OjacsblTNy")
+          (name "SKiDL Tag") "rfjldqM2NH")
         (field
-          (name "SKiDL Line") "odj_controller.py:198"))
+          (name "SKiDL Line") "odj_controller.py:201"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "dce4c4bd-3fba-5937-bdac-62fcf5ad8bdb"))
+      (tstamps "100fecc2-cc45-5b71-9b5f-c519bbb043ec"))
     (comp
       (ref "J23")
       (value "A-ENCODER")
@@ -492,16 +492,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "VEznaDDa1s")
+          (name "SKiDL Tag") "8kMFOWuGjf")
         (field
-          (name "SKiDL Line") "odj_controller.py:214"))
+          (name "SKiDL Line") "odj_controller.py:217"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x04"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "c4a60292-3572-5afc-92dc-efe11c1f0645"))
+      (tstamps "2b12f7a7-8ff9-571e-82fb-9bf4cdc36e58"))
     (comp
       (ref "J24")
       (value "B-ENCODER")
@@ -515,19 +515,19 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "1g3ghBMhaq")
+          (name "SKiDL Tag") "2cybaiVKzy")
         (field
-          (name "SKiDL Line") "odj_controller.py:214"))
+          (name "SKiDL Line") "odj_controller.py:217"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x04"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "cb737ba3-0e2f-5785-873d-99b3cedbd9a3"))
+      (tstamps "7657390a-346f-5dd6-9df3-f4549a27f420"))
     (comp
       (ref "J25")
-      (value "A-LED")
+      (value "A_PLAY-LED")
       (description "")
       (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
       (fields
@@ -538,19 +538,19 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "6SAb9yFWYM")
+          (name "SKiDL Tag") "KJxUx2NxAH")
         (field
-          (name "SKiDL Line") "odj_controller.py:233"))
+          (name "SKiDL Line") "odj_controller.py:237"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "ee9ee1e8-9174-595b-b91a-27831705eaf3"))
+      (tstamps "3be7d5d8-035a-558d-b087-2bf7c03a4793"))
     (comp
       (ref "J26")
-      (value "B-LED")
+      (value "A_CUE-LED")
       (description "")
       (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
       (fields
@@ -561,62 +561,85 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "U6RYp0IhCJ")
+          (name "SKiDL Tag") "9gC2rFOq1Q")
         (field
-          (name "SKiDL Line") "odj_controller.py:233"))
+          (name "SKiDL Line") "odj_controller.py:237"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "b07651a9-e3e3-5798-92f1-70be0043b0e1"))
+      (tstamps "be63b605-028b-5de8-b34a-05fed42177c3"))
     (comp
       (ref "J27")
-      (value "SPARE-GPIO")
+      (value "B_PLAY-LED")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x14_P2.54mm_Vertical")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x14_P2.54mm_Vertical")
+          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "eWLdNJ77FI")
+          (name "SKiDL Tag") "AmkomhGtXp")
         (field
-          (name "SKiDL Line") "odj_controller.py:256"))
+          (name "SKiDL Line") "odj_controller.py:237"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x14"))
+        (part "Header_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "10ba1226-d167-5874-b261-b40a732c5677"))
+      (tstamps "d730c46e-1966-5d85-acf6-39a454aef090"))
     (comp
       (ref "J28")
-      (value "I2C-EXP")
+      (value "B_CUE-LED")
       (description "")
-      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical")
+          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "YYIVJlqeMX")
+          (name "SKiDL Tag") "dijOhKJnCf")
         (field
-          (name "SKiDL Line") "odj_controller.py:283"))
+          (name "SKiDL Line") "odj_controller.py:237"))
       (libsource
         (lib "NO_LIB")
-        (part "Header_1x04"))
+        (part "Header_1x02"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "04d48b9e-45c1-5b91-94c2-ee85bd537e5b"))
+      (tstamps "91f3bd0b-929c-5b78-a05e-50b2875252b3"))
+    (comp
+      (ref "J29")
+      (value "SPARE-GPIO")
+      (description "")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x12_P2.54mm_Vertical")
+      (fields
+        (field
+          (name "Description"))
+        (field
+          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x12_P2.54mm_Vertical")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "fOb2J0hpWU")
+        (field
+          (name "SKiDL Line") "odj_controller.py:262"))
+      (libsource
+        (lib "NO_LIB")
+        (part "Header_1x12"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "54ff3f32-42dc-5824-8d2a-9ddeacc18685"))
     (comp
       (ref "J3")
       (value "A-EQ_HIGH")
@@ -630,16 +653,39 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "HPzNYhv4CZ")
+          (name "SKiDL Tag") "p7Mehn3n98")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "f0d936f3-f0b4-5168-ad75-a81ce9839462"))
+      (tstamps "e82e45e5-2921-561f-8fb6-b7fac6fe92b6"))
+    (comp
+      (ref "J30")
+      (value "I2C-EXP")
+      (description "")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical")
+      (fields
+        (field
+          (name "Description"))
+        (field
+          (name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "DGesJjEuA1")
+        (field
+          (name "SKiDL Line") "odj_controller.py:290"))
+      (libsource
+        (lib "NO_LIB")
+        (part "Header_1x04"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "68249a9f-ca7c-5425-be3f-f77108929a08"))
     (comp
       (ref "J4")
       (value "A-VOLUME")
@@ -653,16 +699,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "sSkNoith2z")
+          (name "SKiDL Tag") "jdddwXUrEd")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "82bc8abd-8762-59cb-bc66-ee6817f9bf10"))
+      (tstamps "abd5024c-45ed-572b-9a08-42681b6b5c7a"))
     (comp
       (ref "J5")
       (value "A-PITCH")
@@ -676,16 +722,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "DMRW0rbCJK")
+          (name "SKiDL Tag") "ce611jlKZ7")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "61243eb6-120e-50ae-bf6b-c1deb565faee"))
+      (tstamps "f1513a5c-1872-51c6-b6d3-064cee8bd9ee"))
     (comp
       (ref "J6")
       (value "A-SPARE5")
@@ -699,16 +745,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "bezD05694t")
+          (name "SKiDL Tag") "IMqX3mf0G1")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "7b8d9bd9-1839-5318-b89e-b1daeb671772"))
+      (tstamps "4407161c-b1e4-552a-a246-f389d12e5a4a"))
     (comp
       (ref "J7")
       (value "A-SPARE6")
@@ -722,16 +768,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "CIt4VEB42s")
+          (name "SKiDL Tag") "jqBmXgYR7u")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "aee5b9fd-cc87-5a68-ab58-8a75ffc23131"))
+      (tstamps "11571ef2-acdc-5ffe-9e99-361f106cc3c0"))
     (comp
       (ref "J8")
       (value "A-SPARE7")
@@ -745,16 +791,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "ExkUJmNAce")
+          (name "SKiDL Tag") "DtNr22k0M_")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "857ffc8e-887f-5ccd-a2e5-935c9f10c672"))
+      (tstamps "01a9447b-0762-5099-9976-e3af08270af5"))
     (comp
       (ref "J9")
       (value "B-EQ_LOW")
@@ -768,16 +814,16 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "91g__Z5pJW")
+          (name "SKiDL Tag") "9N31KO8Nd7")
         (field
-          (name "SKiDL Line") "odj_controller.py:185"))
+          (name "SKiDL Line") "odj_controller.py:188"))
       (libsource
         (lib "NO_LIB")
         (part "Header_1x03"))
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "a69bb1c3-0cec-5672-b2d9-623cd83e706c"))
+      (tstamps "8b8fd502-079b-5e9b-b27f-46f7287a7bfe"))
     (comp
       (ref "R1")
       (value "0R")
@@ -791,7 +837,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "vjpQ8gxW7Y")
+          (name "SKiDL Tag") "G5xtnHDjVm")
         (field
           (name "SKiDL Line") "odj_controller.py:85"))
       (libsource
@@ -800,7 +846,7 @@
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "7514c571-393e-54e2-8f55-f97fa27cb33b"))
+      (tstamps "5709b3cb-09c6-5563-acce-b20ac3dc9729"))
     (comp
       (ref "R2")
       (value "0R")
@@ -814,7 +860,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "k8yUkvvI5z")
+          (name "SKiDL Tag") "wgIfAsASbx")
         (field
           (name "SKiDL Line") "odj_controller.py:85"))
       (libsource
@@ -823,7 +869,53 @@
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "ede25762-a502-566d-9d14-347627d06ea4"))
+      (tstamps "b1f98ef0-65dd-5af2-888f-607a4575f5e5"))
+    (comp
+      (ref "R3")
+      (value "0R")
+      (description "")
+      (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm")
+      (fields
+        (field
+          (name "Description"))
+        (field
+          (name "Footprint") "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "QwLQjoX8Wg")
+        (field
+          (name "SKiDL Line") "odj_controller.py:85"))
+      (libsource
+        (lib "NO_LIB")
+        (part "0R"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "28ab2b88-2c2d-52f3-a527-771b15116748"))
+    (comp
+      (ref "R4")
+      (value "0R")
+      (description "")
+      (footprint "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm")
+      (fields
+        (field
+          (name "Description"))
+        (field
+          (name "Footprint") "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm")
+        (field
+          (name "Datasheet"))
+        (field
+          (name "SKiDL Tag") "TiNZtzK049")
+        (field
+          (name "SKiDL Line") "odj_controller.py:85"))
+      (libsource
+        (lib "NO_LIB")
+        (part "0R"))
+      (sheetpath
+        (names "/")
+        (tstamps "/"))
+      (tstamps "7158c2c2-5923-5502-9e41-5fe9fdb88503"))
     (comp
       (ref "U1")
       (value "RaspberryPi_Pico")
@@ -837,7 +929,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "ZRyrfRuuYo")
+          (name "SKiDL Tag") "9Q1PAgBJ1p")
         (field
           (name "SKiDL Line") "odj_controller.py:63"))
       (libsource
@@ -846,7 +938,7 @@
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "fd0ae016-566d-5d63-b6d2-fafe476ef04c"))
+      (tstamps "d493a4e5-60a8-57f6-9a12-8aad2997b681"))
     (comp
       (ref "U2")
       (value "74HC4051")
@@ -860,7 +952,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "4nF300Bg4T")
+          (name "SKiDL Tag") "5qTebNbfLn")
         (field
           (name "SKiDL Line") "odj_controller.py:63"))
       (libsource
@@ -869,7 +961,7 @@
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "07ff6a44-0937-56a6-9835-b3f6d96b3eef"))
+      (tstamps "5dc51a37-814a-5561-9c02-5be263edd4e9"))
     (comp
       (ref "U3")
       (value "74HC4051")
@@ -883,7 +975,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "7YbRTaQWrO")
+          (name "SKiDL Tag") "3F8XzSuvJ4")
         (field
           (name "SKiDL Line") "odj_controller.py:63"))
       (libsource
@@ -892,7 +984,7 @@
       (sheetpath
         (names "/")
         (tstamps "/"))
-      (tstamps "9c96b8ba-1c71-5081-873f-dc993493cfce")))
+      (tstamps "e0ce1504-a862-526b-b24c-54daad6c2b1d")))
   (nets
     (net
       (code 1)
@@ -951,19 +1043,19 @@
         (pin "1")
         (pintype "PASSIVE"))
       (node
-        (ref "J27")
+        (ref "J29")
         (pin "1")
         (pintype "PASSIVE"))
       (node
-        (ref "J27")
-        (pin "14")
-        (pintype "PASSIVE"))
-      (node
-        (ref "J28")
-        (pin "1")
+        (ref "J29")
+        (pin "12")
         (pintype "PASSIVE"))
       (node
         (ref "J3")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J30")
         (pin "1")
         (pintype "PASSIVE"))
       (node
@@ -1015,7 +1107,7 @@
         (pin "1")
         (pintype "PASSIVE"))
       (node
-        (ref "J27")
+        (ref "J29")
         (pin "2")
         (pintype "PASSIVE"))
       (node
@@ -1432,19 +1524,27 @@
         (pintype "PASSIVE"))
       (node
         (ref "J27")
-        (pin "13")
-        (pintype "PASSIVE"))
-      (node
-        (ref "J27")
-        (pin "3")
+        (pin "2")
         (pintype "PASSIVE"))
       (node
         (ref "J28")
-        (pin "4")
+        (pin "2")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J29")
+        (pin "11")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J29")
+        (pin "3")
         (pintype "PASSIVE"))
       (node
         (ref "J3")
         (pin "3")
+        (pintype "PASSIVE"))
+      (node
+        (ref "J30")
+        (pin "4")
         (pintype "PASSIVE"))
       (node
         (ref "J4")
@@ -1528,31 +1628,7 @@
         (pintype "PASSIVE")))
     (net
       (code 30)
-      (name "LED_A")
-      (class "Default")
-      (node
-        (ref "J25")
-        (pin "1")
-        (pintype "PASSIVE"))
-      (node
-        (ref "R1")
-        (pin "2")
-        (pintype "PASSIVE")))
-    (net
-      (code 31)
-      (name "LED_A_GP")
-      (class "Default")
-      (node
-        (ref "R1")
-        (pin "1")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U1")
-        (pin "24")
-        (pintype "PASSIVE")))
-    (net
-      (code 32)
-      (name "LED_B")
+      (name "LED_A_CUE")
       (class "Default")
       (node
         (ref "J26")
@@ -1563,8 +1639,8 @@
         (pin "2")
         (pintype "PASSIVE")))
     (net
-      (code 33)
-      (name "LED_B_GP")
+      (code 31)
+      (name "LED_A_CUE_GP")
       (class "Default")
       (node
         (ref "R2")
@@ -1572,10 +1648,82 @@
         (pintype "PASSIVE"))
       (node
         (ref "U1")
-        (pin "27")
+        (pin "29")
+        (pintype "PASSIVE")))
+    (net
+      (code 32)
+      (name "LED_A_PLAY")
+      (class "Default")
+      (node
+        (ref "J25")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "R1")
+        (pin "2")
+        (pintype "PASSIVE")))
+    (net
+      (code 33)
+      (name "LED_A_PLAY_GP")
+      (class "Default")
+      (node
+        (ref "R1")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "24")
         (pintype "PASSIVE")))
     (net
       (code 34)
+      (name "LED_B_CUE")
+      (class "Default")
+      (node
+        (ref "J28")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "R4")
+        (pin "2")
+        (pintype "PASSIVE")))
+    (net
+      (code 35)
+      (name "LED_B_CUE_GP")
+      (class "Default")
+      (node
+        (ref "R4")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "12")
+        (pintype "PASSIVE")))
+    (net
+      (code 36)
+      (name "LED_B_PLAY")
+      (class "Default")
+      (node
+        (ref "J27")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "R3")
+        (pin "2")
+        (pintype "PASSIVE")))
+    (net
+      (code 37)
+      (name "LED_B_PLAY_GP")
+      (class "Default")
+      (node
+        (ref "R3")
+        (pin "1")
+        (pintype "PASSIVE"))
+      (node
+        (ref "U1")
+        (pin "27")
+        (pintype "PASSIVE")))
+    (net
+      (code 38)
       (name "MUXA_Z")
       (class "Default")
       (node
@@ -1587,7 +1735,7 @@
         (pin "3")
         (pintype "PASSIVE")))
     (net
-      (code 35)
+      (code 39)
       (name "MUXB_Z")
       (class "Default")
       (node
@@ -1599,7 +1747,7 @@
         (pin "3")
         (pintype "PASSIVE")))
     (net
-      (code 36)
+      (code 40)
       (name "MUX_S0")
       (class "Default")
       (node
@@ -1615,7 +1763,7 @@
         (pin "11")
         (pintype "PASSIVE")))
     (net
-      (code 37)
+      (code 41)
       (name "MUX_S1")
       (class "Default")
       (node
@@ -1631,7 +1779,7 @@
         (pin "10")
         (pintype "PASSIVE")))
     (net
-      (code 38)
+      (code 42)
       (name "MUX_S2")
       (class "Default")
       (node
@@ -1647,15 +1795,15 @@
         (pin "9")
         (pintype "PASSIVE")))
     (net
-      (code 39)
+      (code 43)
       (name "SP_GP0")
       (class "Default")
       (node
-        (ref "J27")
+        (ref "J29")
         (pin "4")
         (pintype "PASSIVE"))
       (node
-        (ref "J28")
+        (ref "J30")
         (pin "2")
         (pintype "PASSIVE"))
       (node
@@ -1663,15 +1811,15 @@
         (pin "1")
         (pintype "PASSIVE")))
     (net
-      (code 40)
+      (code 44)
       (name "SP_GP1")
       (class "Default")
       (node
-        (ref "J27")
+        (ref "J29")
         (pin "5")
         (pintype "PASSIVE"))
       (node
-        (ref "J28")
+        (ref "J30")
         (pin "3")
         (pintype "PASSIVE"))
       (node
@@ -1679,11 +1827,11 @@
         (pin "2")
         (pintype "PASSIVE")))
     (net
-      (code 41)
+      (code 45)
       (name "SP_GP2")
       (class "Default")
       (node
-        (ref "J27")
+        (ref "J29")
         (pin "6")
         (pintype "PASSIVE"))
       (node
@@ -1691,35 +1839,23 @@
         (pin "4")
         (pintype "PASSIVE")))
     (net
-      (code 42)
-      (name "SP_GP22")
-      (class "Default")
-      (node
-        (ref "J27")
-        (pin "11")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U1")
-        (pin "29")
-        (pintype "PASSIVE")))
-    (net
-      (code 43)
+      (code 46)
       (name "SP_GP28")
       (class "Default")
       (node
-        (ref "J27")
-        (pin "12")
+        (ref "J29")
+        (pin "10")
         (pintype "PASSIVE"))
       (node
         (ref "U1")
         (pin "34")
         (pintype "PASSIVE")))
     (net
-      (code 44)
+      (code 47)
       (name "SP_GP3")
       (class "Default")
       (node
-        (ref "J27")
+        (ref "J29")
         (pin "7")
         (pintype "PASSIVE"))
       (node
@@ -1727,11 +1863,11 @@
         (pin "5")
         (pintype "PASSIVE")))
     (net
-      (code 45)
+      (code 48)
       (name "SP_GP4")
       (class "Default")
       (node
-        (ref "J27")
+        (ref "J29")
         (pin "8")
         (pintype "PASSIVE"))
       (node
@@ -1739,26 +1875,14 @@
         (pin "6")
         (pintype "PASSIVE")))
     (net
-      (code 46)
+      (code 49)
       (name "SP_GP5")
       (class "Default")
       (node
-        (ref "J27")
+        (ref "J29")
         (pin "9")
         (pintype "PASSIVE"))
       (node
         (ref "U1")
         (pin "7")
-        (pintype "PASSIVE")))
-    (net
-      (code 47)
-      (name "SP_GP9")
-      (class "Default")
-      (node
-        (ref "J27")
-        (pin "10")
-        (pintype "PASSIVE"))
-      (node
-        (ref "U1")
-        (pin "12")
         (pintype "PASSIVE")))))

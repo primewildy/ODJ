@@ -138,17 +138,21 @@ firmware/host extension are pending.
 
 - [x] **Netlist** (`pcb/odj_controller.py`, SKiDL → KiCad). One Pico,
   both decks, two 74HC4051 (shared select, GP26/GP27), 3 buttons/deck
-  (Play/Cue/🎧Cue), jog encoders, Play LEDs. Everything on plug-in
-  headers; all 8 channels of each mux + spare GPIO + an I2C expansion
-  header broken out. 37 components, 47 nets, generates clean.
+  (Play/Cue/🎧Cue), jog encoders, Play + Cue LEDs per deck. Everything on
+  plug-in headers; all 8 channels of each mux + spare GPIO + an I2C
+  expansion header broken out. 41 components, 49 nets, generates clean.
 - [ ] **PCB layout + route** in KiCad → Gerbers → JLCPCB. 2-layer.
 - [ ] **Firmware: two decks.** Extend `firmware/src/main.c` to a 2nd
   encoder (emit CC 17), a 2nd mux on GP27/ADC1, Deck B buttons (notes
-  36/37), a 2nd Play LED (GP21, lit by host note 36), and the two
-  headphone-cue buttons (notes 44 = Deck A, 45 = Deck B).
+  36/37), the two headphone-cue buttons (notes 44 = A, 45 = B), and 4 LED
+  outputs — Play + Cue per deck (GP18/GP22 deck A, GP21/GP9 deck B), each
+  mirrored from a host note.
 - [ ] **Host: headphone-cue (PFL) buttons.** Map note 44 → toggle
   `SetCueOn(A)`, note 45 → `SetCueOn(B)`, reading current state from
   telemetry. (Engine + UI already have the toggle; just no MIDI binding.)
+- [ ] **Host: Cue-LED feedback.** Extend the `led_watcher` to also emit
+  the Cue notes (41/37) so the Cue buttons light when a cue point is set
+  (and the Play notes 40/36 for both decks). Today it only sends note 40.
 - [ ] **Host: Deck B jog (CC 17).** Generalise the jog/scrub machinery
   in `src/midi.rs` (currently Deck-A-only `JogState`) to both decks.
 - [ ] **Host: Deck B mid-EQ CC.** Deck B has low (CC 8) and high (CC 7)

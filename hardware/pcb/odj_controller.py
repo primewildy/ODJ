@@ -74,7 +74,7 @@ def header_template(n):
 H2 = header_template(2)
 H3 = header_template(3)
 H4 = header_template(4)
-H14 = header_template(14)
+H12 = header_template(12)
 
 
 def passive2(ref_prefix, footprint, value):
@@ -137,9 +137,12 @@ BTN_B_PLAY = Net("BTN_B_PLAY"); BTN_B_PLAY += pico[17]    # GP13  note 36
 BTN_B_CUE = Net("BTN_B_CUE"); BTN_B_CUE += pico[25]       # GP19  note 37
 BTN_B_HPCUE = Net("BTN_B_HPCUE"); BTN_B_HPCUE += pico[26]  # GP20  note 45
 
-# Play-LED drives (through a series resistor to the LED header).
-LED_A_GP = Net("LED_A_GP"); LED_A_GP += pico[24]   # GP18  lit by host note 40
-LED_B_GP = Net("LED_B_GP"); LED_B_GP += pico[27]   # GP21  lit by host note 36
+# Button-LED drives (each through a series resistor to its LED header).
+# Lit by the host echoing the matching note back: Play = 40/36, Cue = 41/37.
+LED_A_PLAY_GP = Net("LED_A_PLAY_GP"); LED_A_PLAY_GP += pico[24]  # GP18  note 40
+LED_A_CUE_GP = Net("LED_A_CUE_GP"); LED_A_CUE_GP += pico[29]     # GP22  note 41
+LED_B_PLAY_GP = Net("LED_B_PLAY_GP"); LED_B_PLAY_GP += pico[27]  # GP21  note 36
+LED_B_CUE_GP = Net("LED_B_CUE_GP"); LED_B_CUE_GP += pico[12]     # GP9   note 37
 
 # ---------------------------------------------------------------------------
 # U2 / U3 — 74HC4051 analog muxes (DIP-16, by datasheet pin number)
@@ -222,8 +225,9 @@ encoder_header(ENCA_A, ENCA_B, "A-ENCODER")
 encoder_header(ENCB_A, ENCB_B, "B-ENCODER")
 
 # ---------------------------------------------------------------------------
-# Play-LED series resistors + headers. R = 0R (arcade button has its own
+# Button-LED series resistors + headers. R = 0R (arcade button has its own
 # series resistor) or ~150R for a bare LED off 3V3. 2-pin header (LED, GND).
+# Play + Cue LED per deck.
 # ---------------------------------------------------------------------------
 def led_chain(gp_net, label):
     r = passive2("R", FP_R, "0R")
@@ -235,8 +239,10 @@ def led_chain(gp_net, label):
     GND.connect(j[2])
 
 
-led_chain(LED_A_GP, "A")
-led_chain(LED_B_GP, "B")
+led_chain(LED_A_PLAY_GP, "A_PLAY")
+led_chain(LED_A_CUE_GP, "A_CUE")
+led_chain(LED_B_PLAY_GP, "B_PLAY")
+led_chain(LED_B_CUE_GP, "B_CUE")
 
 # ---------------------------------------------------------------------------
 # Decoupling — 100nF at each mux VDD + at the Pico, plus a 10uF bulk.
@@ -253,18 +259,19 @@ GND += cbulk[2]
 # Spare GPIO breakout — every unused Pico pin + power/ground, on one header.
 #   GP0-GP5, GP9, GP22, GP28(ADC2) are free for expansion.
 # ---------------------------------------------------------------------------
-spare = H14(value="SPARE-GPIO")
-V3 += spare[1], spare[14]
+spare = H12(value="SPARE-GPIO")
+V3 += spare[1], spare[12]
 V5 += spare[2]
-GND += spare[3], spare[13]
+GND += spare[3], spare[11]
 
 # Spare Pico GPIO → breakout header pins (greppable per-pin nets).
 #   GP0/GP1 = I2C0 (SDA/SCL), GP2/GP3 = I2C1 — for I/O-expander button banks.
 #   GP28 = ADC2, a third analog input if ever needed.
+# (GP9 and GP22 are no longer here — they drive the Deck B / Deck A cue LEDs.)
 spare_map = [
     ("SP_GP0", 1, 4), ("SP_GP1", 2, 5), ("SP_GP2", 4, 6),
     ("SP_GP3", 5, 7), ("SP_GP4", 6, 8), ("SP_GP5", 7, 9),
-    ("SP_GP9", 12, 10), ("SP_GP22", 29, 11), ("SP_GP28", 34, 12),
+    ("SP_GP28", 34, 10),
 ]
 spare_nets = {}
 for name, pico_pin, hdr_pin in spare_map:
