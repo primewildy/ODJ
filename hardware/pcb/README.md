@@ -93,7 +93,7 @@ plenty.
 |-----|------|-------|
 | 1 | Raspberry Pi Pico | with male pin headers soldered on |
 | 2 | 1×20 female socket header | sockets the Pico (rows 0.7"/17.78 mm apart) |
-| 2 | 74HC4051 (DIP-16) | + 2× DIP-16 sockets |
+| 2 | 4051 8-ch mux, DIP-16 | any 4051: `CD4051BE` / `74HC4051N` / `HEF4051BP` — same pinout. + 2× DIP-16 sockets |
 | 2 | Rotary encoder, 600 P/R, NPN open-collector | jog wheels |
 | 8 | Illuminated arcade button, 24 mm | Play/Cue/🎧Cue/Sync × 2 decks |
 | 4 | Slide fader (10 kΩ) | pitch + volume × 2 decks |
