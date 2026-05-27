@@ -18,8 +18,9 @@ Run it:
 
 The parts are defined with explicit pins (no KiCad symbol libraries needed to
 generate the netlist). All footprints are stock KiCad parts (verified against
-KiCad 10's `kicad-library`); the Pico is two 1x20 socket headers rather than a
-Pico-specific footprint, which KiCad doesn't ship. Panel controls use JST-XH;
+KiCad 10's `kicad-library`) except the Pico footprint, which KiCad doesn't
+ship — a clean 40-pad THT footprint is committed at odj.pretty/RPi_Pico_THT
+(socket the Pico into two 1x20 female headers). Panel controls use JST-XH;
 bench/expansion points use 2.54 mm pin headers.
 
 Pin map mirrors hardware/firmware/src/main.c. Keep the two in sync.
@@ -40,7 +41,9 @@ set_default_tool(KICAD8)
 
 PASSIVE = Pin.types.PASSIVE
 
-# --- footprints (standard KiCad 10 libraries) ---
+# --- footprints: stock KiCad 10 libs, except FP_PICO, which is the project
+# footprint committed at odj.pretty/RPi_Pico_THT.kicad_mod (KiCad ships none) ---
+FP_PICO = "odj:RPi_Pico_THT"
 FP_DIP16 = "Package_DIP:DIP-16_W7.62mm"
 FP_R = "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"
 FP_C = "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm"
@@ -84,11 +87,9 @@ def header_template(n, footprint=None, name=None):
 JXH2 = header_template(2, _jst_fp(2), "JST_XH_1x02")
 JXH3 = header_template(3, _jst_fp(3), "JST_XH_1x03")
 JXH4 = header_template(4, _jst_fp(4), "JST_XH_1x04")
-# 2.54 mm pin headers: I2C expansion (1x4), spare-GPIO breakout (1x10), and
-# the two 1x20 sockets the Pico plugs into.
+# 2.54 mm pin headers: I2C expansion (1x4) and spare-GPIO breakout (1x10).
 H4 = header_template(4)
 H10 = header_template(10)
-H20 = header_template(20)
 
 
 def passive2(ref_prefix, footprint, value):
@@ -107,63 +108,65 @@ V3 = Net("+3V3")
 V5 = Net("+5V")
 
 # ---------------------------------------------------------------------------
-# Pico — socketed on two 1x20 pin headers. No Pico module footprint ships with
-# KiCad, and this matches the plug-in design: solder male headers to the Pico,
-# then socket it into two female 1x20 headers on the board. In layout, place
-# the two rows 17.78 mm (0.7") apart, same orientation (pin 1 at top), and the
-# Pico seats. pp(n) maps a Pico *physical* pin (1..40) to a header pad:
-#   PICO-LEFT  pad k = physical pin k        (1..20,  top→bottom)
-#   PICO-RIGHT pad k = physical pin (41 - k)  (40..21, top→bottom)
-# so both headers sit pin-1-at-top and the Pico's right-side pins line up.
+# U1 — Raspberry Pi Pico. Single 40-pad footprint (two 1x20 rows, 2.54 mm
+# pitch, 17.78 mm / 0.7" apart) committed in this repo at
+# odj.pretty/RPi_Pico_THT.kicad_mod — KiCad ships no Pico module footprint, and
+# one part (vs two independent headers) means nothing to hand-align. Pads =
+# Pico physical pins 1..40. Socket it: male headers on the Pico → female 1x20s.
 # ---------------------------------------------------------------------------
-pico_l = H20(value="PICO-LEFT")
-pico_r = H20(value="PICO-RIGHT")
-
-
-def pp(n):
-    return pico_l[n] if n <= 20 else pico_r[41 - n]
-
+PICO_PINS = [
+    (1, "GP0"), (2, "GP1"), (3, "GND"), (4, "GP2"), (5, "GP3"),
+    (6, "GP4"), (7, "GP5"), (8, "GND"), (9, "GP6"), (10, "GP7"),
+    (11, "GP8"), (12, "GP9"), (13, "GND"), (14, "GP10"), (15, "GP11"),
+    (16, "GP12"), (17, "GP13"), (18, "GND"), (19, "GP14"), (20, "GP15"),
+    (21, "GP16"), (22, "GP17"), (23, "GND"), (24, "GP18"), (25, "GP19"),
+    (26, "GP20"), (27, "GP21"), (28, "GND"), (29, "GP22"), (30, "RUN"),
+    (31, "GP26_ADC0"), (32, "GP27_ADC1"), (33, "GND"), (34, "GP28_ADC2"),
+    (35, "ADC_VREF"), (36, "3V3"), (37, "3V3_EN"), (38, "GND"),
+    (39, "VSYS"), (40, "VBUS"),
+]
+pico = make_ic("RPi_Pico", "U", FP_PICO, PICO_PINS)
 
 # Power + ground.
-V3 += pp(36)                                  # 3V3
-V5 += pp(40)                                  # VBUS
+V3 += pico[36]                                # 3V3
+V5 += pico[40]                                # VBUS
 for gnd_pin in (3, 8, 13, 18, 23, 28, 33, 38):
-    GND += pp(gnd_pin)
+    GND += pico[gnd_pin]
 
 # Shared mux select lines.
-S0 = Net("MUX_S0"); S0 += pp(9)    # GP6
-S1 = Net("MUX_S1"); S1 += pp(10)   # GP7
-S2 = Net("MUX_S2"); S2 += pp(11)   # GP8
+S0 = Net("MUX_S0"); S0 += pico[9]    # GP6
+S1 = Net("MUX_S1"); S1 += pico[10]   # GP7
+S2 = Net("MUX_S2"); S2 += pico[11]   # GP8
 
 # Mux commons → the two ADC inputs.
-MUXA_Z = Net("MUXA_Z"); MUXA_Z += pp(31)   # GP26 / ADC0 — Deck A analog
-MUXB_Z = Net("MUXB_Z"); MUXB_Z += pp(32)   # GP27 / ADC1 — Deck B analog
+MUXA_Z = Net("MUXA_Z"); MUXA_Z += pico[31]   # GP26 / ADC0 — Deck A analog
+MUXB_Z = Net("MUXB_Z"); MUXB_Z += pico[32]   # GP27 / ADC1 — Deck B analog
 
 # Jog encoders (NPN open-collector; Pico internal pull-ups, no level shifter).
-ENCA_A = Net("ENCA_A"); ENCA_A += pp(19)   # GP14
-ENCA_B = Net("ENCA_B"); ENCA_B += pp(20)   # GP15
-ENCB_A = Net("ENCB_A"); ENCB_A += pp(21)   # GP16
-ENCB_B = Net("ENCB_B"); ENCB_B += pp(22)   # GP17
+ENCA_A = Net("ENCA_A"); ENCA_A += pico[19]   # GP14
+ENCA_B = Net("ENCA_B"); ENCA_B += pico[20]   # GP15
+ENCB_A = Net("ENCB_A"); ENCB_A += pico[21]   # GP16
+ENCB_B = Net("ENCB_B"); ENCB_B += pico[22]   # GP17
 
 # Buttons (active-low, internal pull-ups). note numbers are the host mapping.
-BTN_A_PLAY = Net("BTN_A_PLAY"); BTN_A_PLAY += pp(14)    # GP10  note 40
-BTN_A_CUE = Net("BTN_A_CUE"); BTN_A_CUE += pp(15)       # GP11  note 41
-BTN_A_HPCUE = Net("BTN_A_HPCUE"); BTN_A_HPCUE += pp(16)  # GP12  note 44
-BTN_B_PLAY = Net("BTN_B_PLAY"); BTN_B_PLAY += pp(17)    # GP13  note 36
-BTN_B_CUE = Net("BTN_B_CUE"); BTN_B_CUE += pp(25)       # GP19  note 37
-BTN_B_HPCUE = Net("BTN_B_HPCUE"); BTN_B_HPCUE += pp(26)  # GP20  note 45
-BTN_A_SYNC = Net("BTN_A_SYNC"); BTN_A_SYNC += pp(4)     # GP2   note 46
-BTN_B_SYNC = Net("BTN_B_SYNC"); BTN_B_SYNC += pp(5)     # GP3   note 47
+BTN_A_PLAY = Net("BTN_A_PLAY"); BTN_A_PLAY += pico[14]    # GP10  note 40
+BTN_A_CUE = Net("BTN_A_CUE"); BTN_A_CUE += pico[15]       # GP11  note 41
+BTN_A_HPCUE = Net("BTN_A_HPCUE"); BTN_A_HPCUE += pico[16]  # GP12  note 44
+BTN_B_PLAY = Net("BTN_B_PLAY"); BTN_B_PLAY += pico[17]    # GP13  note 36
+BTN_B_CUE = Net("BTN_B_CUE"); BTN_B_CUE += pico[25]       # GP19  note 37
+BTN_B_HPCUE = Net("BTN_B_HPCUE"); BTN_B_HPCUE += pico[26]  # GP20  note 45
+BTN_A_SYNC = Net("BTN_A_SYNC"); BTN_A_SYNC += pico[4]     # GP2   note 46
+BTN_B_SYNC = Net("BTN_B_SYNC"); BTN_B_SYNC += pico[5]     # GP3   note 47
 
 # Button-LED drives (each through a series resistor to its LED header).
 # Two per deck: Play (lit while playing) and 🎧-cue / PFL (lit while the deck
 # is routed to the headphones). The host echoes the matching note back to
 # light them: Play = 40/36, 🎧-cue = 44/45. The transport-Cue button has no
 # Pico-driven LED.
-LED_A_PLAY_GP = Net("LED_A_PLAY_GP"); LED_A_PLAY_GP += pp(24)    # GP18  note 40
-LED_A_HPCUE_GP = Net("LED_A_HPCUE_GP"); LED_A_HPCUE_GP += pp(29)  # GP22  note 44
-LED_B_PLAY_GP = Net("LED_B_PLAY_GP"); LED_B_PLAY_GP += pp(27)    # GP21  note 36
-LED_B_HPCUE_GP = Net("LED_B_HPCUE_GP"); LED_B_HPCUE_GP += pp(12)  # GP9   note 45
+LED_A_PLAY_GP = Net("LED_A_PLAY_GP"); LED_A_PLAY_GP += pico[24]    # GP18  note 40
+LED_A_HPCUE_GP = Net("LED_A_HPCUE_GP"); LED_A_HPCUE_GP += pico[29]  # GP22  note 44
+LED_B_PLAY_GP = Net("LED_B_PLAY_GP"); LED_B_PLAY_GP += pico[27]    # GP21  note 36
+LED_B_HPCUE_GP = Net("LED_B_HPCUE_GP"); LED_B_HPCUE_GP += pico[12]  # GP9   note 45
 
 # ---------------------------------------------------------------------------
 # U2 / U3 — 74HC4051 analog muxes (DIP-16, by datasheet pin number)
@@ -299,7 +302,7 @@ spare_map = [
 spare_nets = {}
 for name, pico_pin, hdr_pin in spare_map:
     n = Net(name)
-    n += pp(pico_pin)
+    n += pico[pico_pin]
     n += spare[hdr_pin]
     spare_nets[name] = n
 

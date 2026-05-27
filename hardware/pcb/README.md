@@ -56,19 +56,22 @@ plenty.
    **Preferences → Configure Paths…** (they should be `/usr/share/kicad/...`).
    Then open the **PCB editor** (skip Eeschema; we import the netlist straight
    into the board).
-2. **File → Import → Netlist…** → pick `odj_controller.net` → set *Link Method*
+2. **Register this repo's footprint library.** KiCad ships no Pico module
+   footprint, so a clean one lives at `hardware/pcb/odj.pretty/`. In the PCB
+   editor: **Preferences → Manage Footprint Libraries → Project Specific Libraries**
+   (or Global) → add the path `…/hardware/pcb/odj.pretty` with nickname **`odj`**.
+   Now `odj:RPi_Pico_THT` resolves.
+3. **File → Import → Netlist…** → pick `odj_controller.net` → set *Link Method*
    to **reference designators** (SKiDL randomises the unique-id tstamps each
    regeneration, so refdes is the stable choice for re-imports) → *Update PCB*.
    Footprints land in a heap with a ratsnest showing every connection. Every
-   footprint is a stock KiCad 10 part, so they all resolve — including the
-   Pico, which is two `PinHeader_1x20` sockets (`PICO-LEFT` / `PICO-RIGHT`)
-   rather than a Pico-specific footprint that KiCad doesn't ship.
-   - **Placing the Pico:** set the two 1×20 sockets 17.78 mm (0.7") apart,
-     same orientation (pin 1 at top on both), and a Pico with male headers
-     drops straight in.
-3. Draw the board outline, place parts (see layout tips below), route, add
+   footprint resolves: the stock KiCad parts plus the Pico (`odj:RPi_Pico_THT`,
+   a single 40-pad part — no hand-aligning two halves).
+   - **The Pico** is one footprint with both 1×20 rows already 17.78 mm (0.7")
+     apart; solder two 1×20 female sockets into it and the Pico plugs in.
+4. Draw the board outline, place parts (see layout tips below), route, add
    ground pours on both layers, run **DRC**.
-4. **File → Plot** Gerbers + **Generate Drill Files**, zip them, upload to
+5. **File → Plot** Gerbers + **Generate Drill Files**, zip them, upload to
    JLCPCB / PCBWay / OSHPark. ~£5 for 5 boards from JLCPCB.
 
 ## Layout tips that matter
