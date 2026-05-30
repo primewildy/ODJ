@@ -248,27 +248,22 @@ impl Engine {
         stream.play().context("starting master stream")?;
 
         let cue_stream = if let Some((cd, ccfg, cue_pw_node, ccons)) = cue_consumer_and_device {
-            // If we're routing via a specific PipeWire node, set
-            // PIPEWIRE_NODE just for this stream's open (the pipewire-alsa
-            // plugin reads the env var at PCM-open time), then restore.
-            // Master is already built+playing so it's unaffected.
-            let saved_pw_node = std::env::var("PIPEWIRE_NODE").ok();
+            // cpal's ALSA play() is async — the audio thread does the actual
+            // snd_pcm_start, which is when pipewire-alsa reads PIPEWIRE_NODE
+            // and connects the stream to a target sink. So before we change
+            // PIPEWIRE_NODE for the cue stream, give master's audio thread
+            // a brief moment to finish connecting — otherwise it can read
+            // the env var we set for cue and end up on the cue sink too.
+            // Also leave PIPEWIRE_NODE set after; master is already connected
+            // by this point, and we don't open more streams.
             if let Some(node) = &cue_pw_node {
+                std::thread::sleep(std::time::Duration::from_millis(200));
                 unsafe {
                     std::env::set_var("PIPEWIRE_NODE", node);
                 }
             }
-            let build_result = build_cue_stream(&cd, &ccfg, ccons)
-                .context("building cue output stream");
-            if cue_pw_node.is_some() {
-                unsafe {
-                    match saved_pw_node {
-                        Some(v) => std::env::set_var("PIPEWIRE_NODE", v),
-                        None => std::env::remove_var("PIPEWIRE_NODE"),
-                    }
-                }
-            }
-            let s = build_result?;
+            let s = build_cue_stream(&cd, &ccfg, ccons)
+                .context("building cue output stream")?;
             s.play().context("starting cue stream")?;
             Some(s)
         } else {
