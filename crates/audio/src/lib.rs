@@ -265,28 +265,39 @@ impl Engine {
 }
 
 fn pick_device(host: &cpal::Host, requested: Option<&str>) -> Result<cpal::Device> {
-    let mut first_working: Option<cpal::Device> = None;
-    for d in host.output_devices()? {
-        let name = d.name().unwrap_or_default();
-        let ok = d.default_output_config().is_ok();
-        if let Some(req) = requested {
-            if name == req && ok {
-                return Ok(d);
-            }
-        } else {
-            if name == "pipewire" && ok {
-                return Ok(d);
-            }
-            if ok && first_working.is_none() {
-                first_working = Some(d);
-            }
+    let all: Vec<cpal::Device> = host.output_devices()?.collect();
+    let names: Vec<String> = all.iter().map(|d| d.name().unwrap_or_default()).collect();
+    let usable: Vec<bool> = all.iter().map(|d| d.default_output_config().is_ok()).collect();
+
+    // Match: exact first, then case-insensitive substring. For the default
+    // (no request) prefer "pipewire" — it's the right pick on PipeWire
+    // systems — and fall back to the first usable device.
+    let idx = match requested {
+        Some(req) => {
+            let req_l = req.to_lowercase();
+            (0..all.len()).find(|&i| usable[i] && names[i] == req).or_else(|| {
+                (0..all.len()).find(|&i| usable[i] && names[i].to_lowercase().contains(&req_l))
+            })
         }
+        None => (0..all.len())
+            .find(|&i| usable[i] && names[i] == "pipewire")
+            .or_else(|| (0..all.len()).find(|&i| usable[i])),
+    };
+
+    if let Some(i) = idx {
+        return Ok(all.into_iter().nth(i).unwrap());
     }
-    if let Some(req) = requested {
-        Err(anyhow!("no usable cpal device named {req:?}"))
-    } else {
-        first_working.ok_or_else(|| anyhow!("no usable output device found"))
-    }
+
+    let listing: String = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| format!("  - {n}{}", if usable[i] { "" } else { " (unusable)" }))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let req = requested.unwrap_or("<default>");
+    Err(anyhow!(
+        "no usable cpal output device matching {req:?}.\navailable devices:\n{listing}"
+    ))
 }
 
 struct DeckState {
