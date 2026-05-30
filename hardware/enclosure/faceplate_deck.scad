@@ -25,7 +25,7 @@
 
 // ===== Overall plate =====
 plate_w = 125;
-plate_h = 240;
+plate_h = 210;
 plate_t = 3;
 
 // ===== Linear faders (pitch on left, volume on right) =====
@@ -38,9 +38,9 @@ fader_slot_w      = 4;      // slot width — clearance for the fader stem
 fader_screw_d     = 3.2;    // M3 clearance
 
 pitch_x  = 30;
-pitch_cy = 150;             // slot midpoint
+pitch_cy = 132;             // slot midpoint
 vol_x    = pitch_x + fader_spacing;
-vol_cy   = 80;              // lower (EQ pots stack above)
+vol_cy   = 62;              // lower (EQ pots stack above)
 
 // ===== Rotary encoder (jog) — between the two faders =====
 // User-supplied: 6 mm shaft, 3 × M3 mount screws around the shaft.
@@ -49,7 +49,7 @@ vol_cy   = 80;              // lower (EQ pots stack above)
 // If your encoder's datasheet gives the PCD (mounting circle diameter)
 // directly as 26 mm instead, set enc_mount_pcd = 26.
 enc_x              = (pitch_x + vol_x) / 2;
-enc_y              = 170;     // upper-middle (visually central)
+enc_y              = 152;     // upper-middle (visually central)
 enc_shaft_d        = 7;       // 6 mm shaft + 1 mm clearance
 enc_mount_count    = 3;       // number of M3 mount screws around the shaft
 enc_mount_pcd      = 30;      // mounting pitch-circle diameter (mm)
@@ -62,16 +62,16 @@ pot_bushing_d  = 7.5;       // 7 mm bushing + 0.5 mm clearance
 pot_tab_d      = 3.0;       // 2.7 mm tab + clearance
 pot_tab_offset = 6.6;       // standard tab offset above shaft centre (12 o'clock)
 pot_x          = vol_x;     // aligned with the volume fader
-pot_y_low      = 145;
-pot_y_mid      = 180;
-pot_y_high     = 215;
+pot_y_low      = 127;
+pot_y_mid      = 162;
+pot_y_high     = 197;
 
 // ===== Arcade buttons (Play + Cue), bottom-left =====
 // 30 mm panel cutout for standard illuminated arcade buttons.
 btn_hole_d  = 30;
 btn_play_x  = 30;           // outside (leftmost, aligned with pitch fader)
 btn_cue_x   = 70;           // inside (40 mm to the right of Play)
-btn_y       = 45;
+btn_y       = 27;
 
 // ===== M3 corner mounting holes =====
 corner_screw_d = 3.2;       // M3 clearance
