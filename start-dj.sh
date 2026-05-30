@@ -59,36 +59,40 @@ cargo run --release -- \
     "$@" &
 DJ_PID=$!
 
-# --- Step 3: wait for both dj sink-inputs to register, then force routes ---
+# --- Step 3: wait for "DJ Master" + "DJ Cue" streams, then force routes ---
+# The app names each stream via PIPEWIRE_PROPS so we identify by name
+# rather than ordering — more reliable.
 echo "[dj] waiting for audio streams to appear..."
-DJ_IDS=""
-for _ in $(seq 1 50); do
-    DJ_IDS=$(pactl list sink-inputs 2>/dev/null | awk '
+MASTER_ID=""
+CUE_ID=""
+find_sink_input() {  # arg: application.name to match
+    pactl list sink-inputs 2>/dev/null | awk -v want="$1" '
         /^Sink Input #/ { id = $3; gsub("#", "", id); curr = id }
-        /application\.name = "PipeWire ALSA \[dj\]"/ { print curr }
-    ' | sort -n)
-    if [[ "$(echo "$DJ_IDS" | grep -c .)" -ge 2 ]]; then
-        break
-    fi
+        $0 ~ "application\\.name = \"" want "\"" { print curr; exit }
+    '
+}
+for _ in $(seq 1 50); do
+    MASTER_ID="$(find_sink_input "DJ Master")"
+    CUE_ID="$(find_sink_input "DJ Cue")"
+    if [[ -n "$MASTER_ID" && -n "$CUE_ID" ]]; then break; fi
     sleep 0.2
 done
 
-if [[ "$(echo "$DJ_IDS" | grep -c .)" -ge 2 ]]; then
-    MASTER_ID=$(echo "$DJ_IDS" | sed -n '1p')   # lower id = master (built first)
-    CUE_ID=$(echo "$DJ_IDS"    | sed -n '2p')   # second  = cue
+if [[ -n "$MASTER_ID" && -n "$CUE_ID" ]]; then
     MASTER_TARGET="${MONO_SINK:-$SPEAKER_SINK}"
     if [[ -n "$MASTER_TARGET" ]]; then
-        echo "[dj] master (sink-input $MASTER_ID) → $MASTER_TARGET"
+        echo "[dj] DJ Master (sink-input $MASTER_ID) → $MASTER_TARGET"
         pactl move-sink-input "$MASTER_ID" "$MASTER_TARGET" 2>/dev/null \
             || echo "[dj]   (move failed — check pavucontrol)"
     fi
     if [[ -n "$UGREEN_SINK" ]]; then
-        echo "[dj] cue    (sink-input $CUE_ID) → $UGREEN_SINK"
+        echo "[dj] DJ Cue    (sink-input $CUE_ID) → $UGREEN_SINK"
         pactl move-sink-input "$CUE_ID" "$UGREEN_SINK" 2>/dev/null \
             || echo "[dj]   (move failed — check pavucontrol)"
     fi
 else
-    echo "[dj] dj streams didn't appear within ~10 s — routing left untouched. Check pavucontrol."
+    echo "[dj] DJ Master / DJ Cue streams didn't appear within ~10 s — check pavucontrol"
+    echo "[dj]   master=$MASTER_ID  cue=$CUE_ID"
 fi
 
 wait "$DJ_PID"
