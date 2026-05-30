@@ -141,11 +141,15 @@ impl Engine {
     ) -> Result<Self> {
         // Label this process's first ALSA-via-PipeWire stream as "DJ Master"
         // so pw-top / pavucontrol shows distinct names for the two streams.
-        // The pipewire-alsa plugin reads PIPEWIRE_PROP_node_description at
-        // PCM-open time. The cue stream label is set later, around its
-        // build, alongside PIPEWIRE_NODE.
+        // The pipewire-alsa plugin reads `PIPEWIRE_PROPS` (SPA-JSON, multiple
+        // props in one string) at PCM-open time. We set application.name,
+        // node.description and media.name so whichever one pw-top / your
+        // mixer GUI picks for display, it lands on our chosen label.
         unsafe {
-            std::env::set_var("PIPEWIRE_PROP_node_description", "DJ Master");
+            std::env::set_var(
+                "PIPEWIRE_PROPS",
+                r#"{ application.name = "DJ Master" node.description = "DJ Master" media.name = "DJ Master" }"#,
+            );
         }
 
         let host = cpal::default_host();
@@ -275,7 +279,10 @@ impl Engine {
                 // Rename for pw-top / pavucontrol so the two dj streams are
                 // distinguishable. This applies to the next stream opened
                 // (the cue, just below).
-                std::env::set_var("PIPEWIRE_PROP_node_description", "DJ Cue");
+                std::env::set_var(
+                    "PIPEWIRE_PROPS",
+                    r#"{ application.name = "DJ Cue" node.description = "DJ Cue" media.name = "DJ Cue" }"#,
+                );
                 if let Some(node) = &cue_pw_node {
                     std::env::set_var("PIPEWIRE_NODE", node);
                 }
