@@ -43,13 +43,18 @@ vol_x    = pitch_x + fader_spacing;
 vol_cy   = 80;              // lower (EQ pots stack above)
 
 // ===== Rotary encoder (jog) — between the two faders =====
-// User-supplied: 6 mm shaft, 26 mm between mount holes, M3 screws.
-enc_x           = (pitch_x + vol_x) / 2;
-enc_y           = 170;      // upper-middle (visually central)
-enc_shaft_d     = 7;        // 6 mm shaft + 1 mm clearance
-enc_mount_pitch = 26;
-enc_mount_axis  = "v";      // "v" = mount holes above/below shaft, "h" = left/right
-enc_screw_d     = 3.2;
+// User-supplied: 6 mm shaft, 3 × M3 mount screws around the shaft.
+// "26 mm between mount holes" interpreted as the chord between two adjacent
+// holes → mounting pitch-circle diameter ≈ chord × 2/√3 ≈ 30 mm.
+// If your encoder's datasheet gives the PCD (mounting circle diameter)
+// directly as 26 mm instead, set enc_mount_pcd = 26.
+enc_x              = (pitch_x + vol_x) / 2;
+enc_y              = 170;     // upper-middle (visually central)
+enc_shaft_d        = 7;       // 6 mm shaft + 1 mm clearance
+enc_mount_count    = 3;       // number of M3 mount screws around the shaft
+enc_mount_pcd      = 30;      // mounting pitch-circle diameter (mm)
+enc_mount_rotation = 90;      // degrees — 90 = first hole at 12 o'clock
+enc_screw_d        = 3.2;
 
 // ===== Rotary EQ pots (standard 9 mm Alpha-style, 2.7 mm anti-rotation tab) =====
 // Stacked above the volume fader. HIGH at top, MID middle, LOW just above the fader.
@@ -93,13 +98,11 @@ module rotary_pot(cx, cy) {
 
 module encoder(cx, cy) {
     translate([cx, cy]) circle(d=enc_shaft_d, $fn=40);
-    if (enc_mount_axis == "v") {
-        translate([cx, cy + enc_mount_pitch/2]) screw_hole(enc_screw_d);
-        translate([cx, cy - enc_mount_pitch/2]) screw_hole(enc_screw_d);
-    } else {
-        translate([cx + enc_mount_pitch/2, cy]) screw_hole(enc_screw_d);
-        translate([cx - enc_mount_pitch/2, cy]) screw_hole(enc_screw_d);
-    }
+    r = enc_mount_pcd / 2;
+    for (i = [0 : enc_mount_count - 1])
+        let (a = enc_mount_rotation + i * 360 / enc_mount_count)
+        translate([cx + r * cos(a), cy + r * sin(a)])
+            screw_hole(enc_screw_d);
 }
 
 module arcade_button(cx, cy) {
