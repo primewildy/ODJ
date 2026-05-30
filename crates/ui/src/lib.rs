@@ -296,6 +296,10 @@ pub struct DjApp {
     analysis_progress: Arc<AtomicUsize>,
     analysis_total: usize,
     sort: SortState,
+    /// Headphone bus state — the global "🎧 vol" and "CUE↔MASTER" mix knobs
+    /// in the top bar. Maintained locally; sent to the engine on change.
+    cue_gain: f32,
+    cue_mix: f32,
 }
 
 impl DjApp {
@@ -341,6 +345,8 @@ impl DjApp {
                 column: SortColumn::Title,
                 ascending: true,
             },
+            cue_gain: 1.0,
+            cue_mix: 1.0,
         }
     }
 
@@ -661,6 +667,19 @@ impl eframe::App for DjApp {
                         deck: DeckId::B,
                         on: beat_align,
                     });
+                }
+                ui.separator();
+                if ui.add(egui::Slider::new(&mut self.cue_gain, 0.0..=1.5)
+                        .text("🎧 vol"))
+                    .changed()
+                {
+                    let _ = self.sender.send(DeckCommand::SetCueGain { gain: self.cue_gain });
+                }
+                if ui.add(egui::Slider::new(&mut self.cue_mix, 0.0..=1.0)
+                        .text("CUE↔MASTER"))
+                    .changed()
+                {
+                    let _ = self.sender.send(DeckCommand::SetCueMix { mix: self.cue_mix });
                 }
                 ui.separator();
                 let analysed = self.analysis_progress.load(Ordering::Relaxed);

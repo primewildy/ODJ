@@ -376,10 +376,24 @@ struct Mixer {
     /// Lock-free SPSC producer to the cue stream's callback. None if no
     /// cue device was configured at engine start.
     cue_producer: Option<rtrb::Producer<f32>>,
+    /// Linear gain on the headphone bus. 1.0 = unity.
+    cue_gain: f32,
+    /// CUE↔MASTER blend in the headphones. 0 = pure master, 1 = pure cue.
+    cue_mix: f32,
 }
 
 impl Mixer {
     fn apply(&mut self, cmd: DeckCommand) {
+        // Global headphone-bus commands (no deck field).
+        if let DeckCommand::SetCueGain { gain } = cmd {
+            self.cue_gain = gain.clamp(0.0, 2.0);
+            return;
+        }
+        if let DeckCommand::SetCueMix { mix } = cmd {
+            self.cue_mix = mix.clamp(0.0, 1.0);
+            return;
+        }
+
         // Sync needs to read both decks; handle separately before borrowing
         // a single deck mutably.
         if let DeckCommand::Sync { deck: which } = cmd {
@@ -542,6 +556,8 @@ impl Mixer {
                 deck.cue_on = on;
             }
             DeckCommand::Sync { .. } => unreachable!("handled above"),
+            DeckCommand::SetCueGain { .. } => unreachable!("handled above"),
+            DeckCommand::SetCueMix { .. } => unreachable!("handled above"),
         }
 
         // Post-apply: beat-align this deck if a paused→playing transition
@@ -622,6 +638,18 @@ impl Mixer {
         let g_b = self.deck_b.gain_linear;
         for (o, s) in out.iter_mut().zip(scratch_b.iter()) {
             *o += *s * g_b;
+        }
+
+        // Headphone bus: blend the cued-decks sum with the master mix, then
+        // apply the global headphone gain. cue_mix = 0 → pure master, 1 →
+        // pure cue. Done in-place on cue_scratch before pushing to the ring.
+        if self.cue_producer.is_some() {
+            let g = self.cue_gain;
+            let m = self.cue_mix;
+            let one_m = 1.0 - m;
+            for (c, o) in self.cue_scratch[..needed].iter_mut().zip(out.iter()) {
+                *c = g * (m * *c + one_m * *o);
+            }
         }
 
         // Push the cue mix to the secondary stream's ring buffer. If the
@@ -941,6 +969,9 @@ fn cmd_target(cmd: &DeckCommand) -> DeckId {
         | DeckCommand::SetBeatAlign { deck, .. }
         | DeckCommand::SetCueOn { deck, .. }
         | DeckCommand::Sync { deck } => *deck,
+        DeckCommand::SetCueGain { .. } | DeckCommand::SetCueMix { .. } => {
+            unreachable!("global headphone-bus commands have no deck target — handled in apply()")
+        }
     }
 }
 
@@ -1004,6 +1035,8 @@ fn build_stream(
         scratch: Vec::with_capacity(4096),
         cue_scratch: Vec::with_capacity(4096),
         cue_producer,
+        cue_gain: 1.0,
+        cue_mix: 1.0,
     };
     let err_fn = |e| eprintln!("audio: master stream error: {e}");
     device

@@ -133,6 +133,13 @@ pub enum DeckCommand {
     /// output, typically headphones). Multiple decks can be cued at once;
     /// their cue contributions sum.
     SetCueOn { deck: DeckId, on: bool },
+    /// Headphone-bus output gain (global, not per-deck). 1.0 = unity.
+    /// Clamped to [0, 2] by the engine. The headphone volume knob.
+    SetCueGain { gain: f32 },
+    /// Headphone CUE↔MASTER blend (Pioneer's "Headphones Mix" knob).
+    /// 0 = pure master in the headphones, 1 = pure cue (only the decks
+    /// with `cue_on`). Intermediate values mix the two. Clamped to [0, 1].
+    SetCueMix { mix: f32 },
 }
 
 pub type CommandProducer = rtrb::Producer<DeckCommand>;
