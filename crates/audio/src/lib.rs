@@ -139,6 +139,15 @@ impl Engine {
         device_name: Option<&str>,
         cue_device_name: Option<&str>,
     ) -> Result<Self> {
+        // Label this process's first ALSA-via-PipeWire stream as "DJ Master"
+        // so pw-top / pavucontrol shows distinct names for the two streams.
+        // The pipewire-alsa plugin reads PIPEWIRE_PROP_node_description at
+        // PCM-open time. The cue stream label is set later, around its
+        // build, alongside PIPEWIRE_NODE.
+        unsafe {
+            std::env::set_var("PIPEWIRE_PROP_node_description", "DJ Master");
+        }
+
         let host = cpal::default_host();
         let device = pick_device(&host, device_name)?;
         eprintln!(
@@ -261,9 +270,13 @@ impl Engine {
             // the env var we set for cue and end up on the cue sink too.
             // Also leave PIPEWIRE_NODE set after; master is already connected
             // by this point, and we don't open more streams.
-            if let Some(node) = &cue_pw_node {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                unsafe {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            unsafe {
+                // Rename for pw-top / pavucontrol so the two dj streams are
+                // distinguishable. This applies to the next stream opened
+                // (the cue, just below).
+                std::env::set_var("PIPEWIRE_PROP_node_description", "DJ Cue");
+                if let Some(node) = &cue_pw_node {
                     std::env::set_var("PIPEWIRE_NODE", node);
                 }
             }
