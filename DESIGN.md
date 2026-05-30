@@ -11,8 +11,11 @@ commit. The earlier "v1 plan" version of this file lives in git history.
 - Designed so a custom microcontroller (phase-2 RP2040 / ESP32-S3) with
   USB MIDI drops straight in as another producer.
 
-Latency baseline (measured): **2.90 ms** through PipeWire on this machine
-at 128 frames × 44.1 kHz F32 stereo.
+Latency baseline: **~5.8 ms** through PipeWire at 256 frames × 44.1 kHz
+F32 stereo (the default — gives enough headroom for both the master and
+cue ALSA streams to schedule without xruns). **2.9 ms** at 128 frames is
+fine for single-stream master-only setups; flip `TARGET_BUFFER_FRAMES`
+in `crates/audio/src/lib.rs` if you want the lower latency.
 
 ## 2. Non-goals (still)
 

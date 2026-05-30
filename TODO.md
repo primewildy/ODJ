@@ -88,13 +88,10 @@ priority order within each section.
   custom controller will be MSB+LSB pairs (CC m, CC m+32). Currently we
   only treat single CCs. Engine takes `f32` directly so only the parse
   side needs the work.
-- [ ] **Relative-CC jog wheel handling.** The firmware (`hardware/firmware/`)
-  emits CC 16 with value `64 ± delta` per scan tick. Host side needs:
-  - Translate each CC 16 message into a `SetNudge { delta * scale }`
-    proportional to spin speed.
-  - A 50–100 ms timer that clears the nudge back to 0 when CC 16
-    stops arriving (deck returns to set tempo when you let go of the
-    jog).
+- [x] **Relative-CC jog wheel handling.** Done — `src/midi.rs::on_jog`
+  translates each CC 16 into `SetNudge { delta * scale }` for nudge
+  while playing, or a scrub-target nudge while paused (audible scrub).
+  A 60 ms watchdog clears the nudge and re-pauses on quiet jog.
 - [ ] **TOML mapping file** instead of the hardcoded LPD8 layout. The
   v1 plan had a schema sketch — pick that up so different controllers
   can be added without code changes. Becomes more urgent as the hardware
@@ -127,8 +124,11 @@ into `main`.)
 - [ ] **Capacitive jog touch** sensor on the platter top (cap-touch
   module or RC charge-time measurement). Required for proper scratch
   detection later.
-- [ ] **More LEDs.** Currently only the Play button. Cue, sync, etc.
-  follow the same pattern.
+- [ ] **More LEDs.** PCB v1 wires Play + 🎧Cue(PFL) LEDs per deck;
+  the breadboard prototype lights Play only. Driving the PFL LEDs from
+  the host (note 44/45 round-trip) is on the "Two-deck PCB" list below.
+  Sync-state LEDs would be a future addition (no GPIO budget on v1 PCB,
+  would need an I2C expander).
 
 ## Two-deck PCB
 
@@ -170,14 +170,31 @@ firmware/host extension are pending.
   I/O expander on the I2C-EXP header, or a standalone USB-MIDI pad
   controller (needs the multi-port input above). 74HC165 shift-register
   scanning is a third option if pin-count ever forces it.
+- [ ] **Two browse encoders (track select) via I2C-EXP.** EC11-style
+  rotary encoders with detents + click, one per deck, for navigating the
+  track list on the hardware. Direct GPIO is 1 pin short on v1 (5 spare,
+  need 6); the I2C-EXP header was built in for exactly this. Two
+  options: Adafruit I2C rotary-encoder breakouts (one I2C node each,
+  chainable), or an MCP23017 + 2 raw EC11s on a small daughter-board.
+  Browse-speed encoders don't need sub-ms response, so I2C polling at
+  100 Hz is plenty. Firmware: I2C poll loop + quadrature decode +
+  debounce. Host: new MIDI mapping for "next/prev track", "load to
+  deck N on click".
 
 ## Audio routing
 
 - [x] **Stereo cue / preview output.** Done. `--cue-device <name>`
   opens a second cpal stream; per-deck `cue` toggles route post-EQ
   pre-fader audio into it. See DESIGN.md §14.
-- [ ] **Cue mix bus master volume.** Currently the cue mix is summed at
-  unit gain. Add a host-side `cue_gain` and a UI slider / MIDI knob.
+- [x] **Headphone bus: vol + CUE↔MASTER mix.** Done. `SetCueGain` and
+  `SetCueMix` commands with UI sliders in the top bar. Engine math:
+  `headphone = vol × (mix · cued + (1-mix) · master)`. MIDI binding
+  pending hardware controller.
+- [x] **PipeWire-routed cue fallback.** cpal's ALSA enumeration doesn't
+  always surface USB DACs on PipeWire systems. If `--cue-device` doesn't
+  match cpal, the engine looks up a matching PipeWire sink (via `pactl`,
+  with `_`/`-`/space normalisation) and routes the cue stream there via
+  `PIPEWIRE_NODE`. See `docs/notes/pipewire_routing.md`.
 - [ ] **Cue clock drift compensation.** Two USB audio devices drift by
   tens of ms over an hour. Resampling the cue stream to match master's
   rate would eliminate this. Not yet noticeable in practice.

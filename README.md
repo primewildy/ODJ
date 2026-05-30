@@ -11,15 +11,23 @@ hardware controller (RP2040 / ESP32-S3) speaking USB MIDI.
 ## Status
 
 Working end-to-end as a two-deck mixing tool you can DJ a set on. Tested
-with an AKAI LPD8 as the dev controller against a library of ~550 mp3/flac
-tracks, and with a homebrew RP2040 controller (`hardware/`) whose Deck A
-side — jog wheel, transport buttons, 3-band EQ, volume + pitch faders,
-Play LED — is fully wired and working.
+with an AKAI LPD8 + homebrew **ODJ Controller** (`hardware/`) against a
+library of ~550 mp3/flac tracks. The breadboard prototype of the
+controller (Deck A: jog, transport buttons, 3-band EQ + volume + pitch
+faders, Play LED) is fully working. A **two-deck carrier PCB**
+(`hardware/pcb/`) is ready for fab — single Pico, JST-XH plug-in panel
+connectors for all controls, plug-in CJMCU-4051 mux modules. A
+**3D-printable faceplate** (`hardware/enclosure/`, parametric OpenSCAD)
+matches it. Cue/PFL output works via a USB DAC dongle with PipeWire
+routing handled automatically by `start-dj.sh`.
 
 Built features:
-- Two decks, cpal/PipeWire output at 128-frame buffers (~2.9 ms latency).
+- Two decks, cpal/PipeWire output at 256-frame buffers (~5.8 ms latency
+  end-to-end; drops to ~2.9 ms at 128 if you run master only).
 - Optional second cpal stream for **PFL / cue monitoring** on a separate
-  output device (headphones).
+  output device (e.g. a USB DAC). **Headphone bus** with its own volume
+  and a Pioneer-style **CUE↔MASTER blend** so you can mix the cued decks
+  with the main mix in your headphones.
 - Symphonia-based decode (mp3, flac, wav, aac/m4a).
 - Phase-vocoder key-lock (with identity phase-locking for cleaner highs)
   + vinyl-style coupled-pitch mode per deck.
@@ -40,31 +48,49 @@ Built features:
 - **Homebrew hardware controller** prototype under `hardware/` — RP2040
   + optical encoder + arcade buttons + 74HC4051 analog mux. Class-
   compliant USB MIDI; sysex-triggered reboot for one-command re-flash
-  (`hardware/flash.sh`).
+  (`hardware/flash.sh`). Two-deck carrier PCB (one Pico, both decks,
+  JST-XH plug-in headers, CJMCU-4051 mux modules) generated from a
+  SKiDL netlist (`hardware/pcb/odj_controller.py`) → KiCad → Gerbers.
+  Parametric 3D-printed faceplate in `hardware/enclosure/`.
 
 See [DESIGN.md](./DESIGN.md) for architecture and [TODO.md](./TODO.md) for
 roadmap.
 
 ## Running
 
+The convenient way (handles PipeWire routing for the cue stream and
+restores your normal audio setup on exit):
+
+```
+./start-dj.sh
+```
+
+That's a thin wrapper around `cargo run --release` with sensible flags
+and some PipeWire choreography (see [`docs/notes/pipewire_routing.md`](docs/notes/pipewire_routing.md)).
+Or run the binary directly:
+
 ```
 cargo run --release -- [--device <cpal-name>] [--cue-device <cpal-name>] \
                       [--midi <port-substring>] [--music-dir <path>]
 ```
 
-Defaults:
+Defaults / behaviour:
 - `--device` unset → uses the cpal `pipewire` device for the master out.
-  Override to target a specific sink directly (e.g. an analog speaker
-  sink that bypasses a default-sink loopback). When the cpal device name
+  Override to target a specific sink directly. When the cpal device name
   is `pipewire`, the `PIPEWIRE_NODE` env var (if set) is honoured.
 - `--cue-device` unset → no cue stream is opened; deck `cue` toggles
-  have no audible effect. Set this to a second cpal device name (e.g.
-  `hw:CARD=USB,DEV=0` for a USB DAC dongle) to enable PFL monitoring.
-  The two streams have independent clocks; drift is irrelevant for
-  cue since master and cue are heard on separate transducers.
-- `--midi LPD8` matches any port whose name contains "LPD8". Set to `""`
-  to disable MIDI entirely. The custom hardware enumerates as
-  "ODJ Controller", so `--midi "ODJ Controller"` selects it.
+  have no audible effect. Set this to a cpal device name to enable PFL
+  monitoring. If cpal can't find that name in its ALSA enumeration
+  (common for USB DACs on PipeWire systems), it falls back to looking up
+  a PipeWire sink whose name contains the same substring and routes the
+  cue stream to it via `PIPEWIRE_NODE` — so e.g. `--cue-device "KT USB"`
+  finds `alsa_output.usb-…KT_USB_Audio…` without needing the full name.
+  The two streams have independent clocks; drift is irrelevant for cue
+  since master and cue are heard on separate transducers.
+- `--midi "ODJ"` is what `start-dj.sh` passes; matches the homebrew
+  controller's USB-MIDI port name. The binary's default is `"LPD8"` for
+  legacy dev with an AKAI pad; either substring works. Set to `""` to
+  disable MIDI entirely.
 - `--music-dir music` (relative to CWD). Audio files in this directory
   (non-recursive) populate the in-app track list.
 
@@ -127,6 +153,8 @@ is logged to stderr — read them off and edit the `match` arms in
 ```
 /
 ├── Cargo.toml          # workspace + binary
+├── start-dj.sh         # launch wrapper — PipeWire routing for the cue
+│                       #   stream, auto-restores your normal setup
 ├── src/
 │   ├── main.rs         # eframe entry, CLI parse, MIDI thread spawn
 │   └── midi.rs         # LPD8 / ODJ Controller MIDI input + jog handler
@@ -135,11 +163,16 @@ is logged to stderr — read them off and edit the `match` arms in
 │   ├── decode/         # symphonia → TrackBuffer
 │   ├── analysis/       # BPM + beat grid (DSP) + key (Krumhansl)
 │   ├── audio/          # cpal stream(s), mixer, EQ, phase vocoder,
-│   │                   #   beat align, cue ring buffer
+│   │                   #   beat align, cue ring + headphone bus
 │   └── ui/             # eframe app, track table, persistence
-└── hardware/           # RP2040 firmware + schematic + flash.sh
-    ├── firmware/       # Pico SDK C project
-    ├── SCHEMATIC.md    # pinout, wiring tables
+└── hardware/
+    ├── firmware/       # Pico SDK C project (breadboard Deck A)
+    ├── pcb/            # two-deck carrier — SKiDL netlist + KiCad
+    │   ├── odj_controller.py   # SKiDL → odj_controller.net
+    │   └── odj.pretty/         # project-local footprints (Pico,
+    │                           #   CJMCU-4051 mux module)
+    ├── enclosure/      # 3D-printable faceplate — parametric OpenSCAD
+    ├── SCHEMATIC.md    # Deck-A breadboard wiring reference
     └── flash.sh        # sysex-reboot auto-flash workflow
 ```
 

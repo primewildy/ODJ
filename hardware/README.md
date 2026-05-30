@@ -22,7 +22,11 @@ the existing app picks it up via `midir` the same way it does the LPD8.
   mux channel map, wiring diagram, build order.
 - [`pcb/`](./pcb/) — two-deck carrier-board PCB, described in SKiDL
   (`odj_controller.py` → KiCad netlist). See `pcb/README.md`.
-- [`firmware/`](./firmware/) — Pico SDK C project.
+- [`enclosure/`](./enclosure/) — 3D-printable single-deck faceplate,
+  parametric OpenSCAD (`faceplate_deck.scad`). Cutouts sized for the
+  spec'd controls (encoder + 30 mm arcade buttons + 80 mm linear faders
+  + standard 9 mm pots), M3 corner mounting holes. Tweak any number at
+  the top of the file, F6 → export STL → print flat.
   - `CMakeLists.txt` — build configuration.
   - `src/main.c` — main loop: encoder polling, button debounce, mux
     scan, MIDI send.
