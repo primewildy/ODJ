@@ -167,9 +167,32 @@ impl Engine {
 
         // Optionally open the cue device. We open it first (so we can hand
         // its consumer half into the master callback), then build streams.
+        //
+        // cpal's ALSA enumeration on PipeWire systems doesn't always surface
+        // every sink (USB DACs in particular). If the user-supplied name
+        // doesn't match a cpal device, we fall back to opening the
+        // `pipewire` cpal device and routing it to a specific PipeWire
+        // sink via the PIPEWIRE_NODE env var (set just around the cue
+        // stream's open, then restored, so master keeps its own routing).
         let cue_setup = if let Some(name) = cue_device_name {
-            let cue_dev = pick_device(&host, Some(name))
-                .with_context(|| format!("cue device {name:?} not found"))?;
+            let (cue_dev, cue_pw_node): (cpal::Device, Option<String>) =
+                match pick_device(&host, Some(name)) {
+                    Ok(d) => (d, None),
+                    Err(orig_err) => {
+                        if let Some(pw_node) = find_pipewire_sink(name) {
+                            let pw_dev = pick_device(&host, Some("pipewire"))
+                                .context("the 'pipewire' cpal device is needed for PipeWire-routed cue but wasn't found")?;
+                            eprintln!(
+                                "audio: cue routed via PipeWire node {pw_node:?}"
+                            );
+                            (pw_dev, Some(pw_node))
+                        } else {
+                            return Err(orig_err).with_context(|| {
+                                format!("cue device {name:?} not found in cpal enumeration or as a PipeWire sink")
+                            });
+                        }
+                    }
+                };
             let cue_cfg = cue_dev
                 .default_output_config()
                 .context("cue device has no default output config")?;
@@ -198,13 +221,13 @@ impl Engine {
             }
             let (prod, cons) =
                 rtrb::RingBuffer::<f32>::new(CUE_RING_CAPACITY);
-            Some((cue_dev, cue_cfg, prod, cons))
+            Some((cue_dev, cue_cfg, cue_pw_node, prod, cons))
         } else {
             None
         };
 
         let (cue_producer, cue_consumer_and_device) = match cue_setup {
-            Some((d, c, p, cons)) => (Some(p), Some((d, c, cons))),
+            Some((d, c, pw, p, cons)) => (Some(p), Some((d, c, pw, cons))),
             None => (None, None),
         };
 
@@ -224,9 +247,28 @@ impl Engine {
         .context("building master output stream")?;
         stream.play().context("starting master stream")?;
 
-        let cue_stream = if let Some((cd, ccfg, ccons)) = cue_consumer_and_device {
-            let s = build_cue_stream(&cd, &ccfg, ccons)
-                .context("building cue output stream")?;
+        let cue_stream = if let Some((cd, ccfg, cue_pw_node, ccons)) = cue_consumer_and_device {
+            // If we're routing via a specific PipeWire node, set
+            // PIPEWIRE_NODE just for this stream's open (the pipewire-alsa
+            // plugin reads the env var at PCM-open time), then restore.
+            // Master is already built+playing so it's unaffected.
+            let saved_pw_node = std::env::var("PIPEWIRE_NODE").ok();
+            if let Some(node) = &cue_pw_node {
+                unsafe {
+                    std::env::set_var("PIPEWIRE_NODE", node);
+                }
+            }
+            let build_result = build_cue_stream(&cd, &ccfg, ccons)
+                .context("building cue output stream");
+            if cue_pw_node.is_some() {
+                unsafe {
+                    match saved_pw_node {
+                        Some(v) => std::env::set_var("PIPEWIRE_NODE", v),
+                        None => std::env::remove_var("PIPEWIRE_NODE"),
+                    }
+                }
+            }
+            let s = build_result?;
             s.play().context("starting cue stream")?;
             Some(s)
         } else {
@@ -298,6 +340,39 @@ fn pick_device(host: &cpal::Host, requested: Option<&str>) -> Result<cpal::Devic
     Err(anyhow!(
         "no usable cpal output device matching {req:?}.\navailable devices:\n{listing}"
     ))
+}
+
+/// Best-effort: resolve a user-supplied name to a PipeWire sink node
+/// (e.g. "alsa_output.usb-..."). Used as a fallback when cpal's ALSA
+/// enumeration doesn't surface a device but PipeWire knows about it —
+/// common for USB DACs on PipeWire systems. Shells out to `pactl`; if
+/// pactl isn't installed or no sink matches the substring, returns None.
+fn find_pipewire_sink(query: &str) -> Option<String> {
+    // Normalise so a friendly "KT USB Audio" matches the underscored
+    // PipeWire node name "alsa_output.usb-KTMicro_KT_USB_Audio_...".
+    fn norm(s: &str) -> String {
+        s.to_lowercase().replace(['_', '-'], " ")
+    }
+    let out = std::process::Command::new("pactl")
+        .args(["list", "short", "sinks"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let q = norm(query);
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        // Tab-separated: "<id>\t<node_name>\t<driver>\t<format>\t<state>".
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() >= 2 {
+            let name = cols[1];
+            if norm(name).contains(&q) {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
 }
 
 struct DeckState {
