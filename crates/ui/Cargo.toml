@@ -12,3 +12,4 @@ eframe = { workspace = true }
 egui_extras = { workspace = true }
 anyhow = { workspace = true }
 libc = { workspace = true }
+stems = { path = "../stems" }

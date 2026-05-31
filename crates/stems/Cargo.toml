@@ -1,0 +1,9 @@
+[package]
+name = "stems"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+control = { path = "../control" }
+decode = { path = "../decode" }
+anyhow = { workspace = true }

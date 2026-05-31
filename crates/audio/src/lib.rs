@@ -1035,17 +1035,26 @@ fn render_deck(deck: &mut DeckState, out: &mut [f32], out_channels: usize, engin
         deck.playing = false;
         return;
     }
-    let samples = &buf.samples;
-    // Allow negative effective_speed so the deck can play backwards (used
-    // by paused-jog scrub). Magnitude clamped at 4× either direction.
+    // Capture pure data refs before the loop so we can borrow
+    // `deck.playhead` mutably inside without lifetime conflicts.
+    let buf_arc = Arc::clone(buf);
+    let samples = &buf_arc.samples[..];
+    let stems_arc = deck.stems.as_ref().map(Arc::clone);
+    // Use stems iff they exist AND their layout matches the source.
+    // Cheap defence — demucs always emits matching geometry but the
+    // user could in principle have swapped a file under our feet.
+    let use_stems = matches!(
+        stems_arc.as_deref(),
+        Some(s) if s.channels as usize == in_channels && s.frames() >= total_frames
+    );
+    let g_drums = deck.gain_drums;
+    let g_bass = deck.gain_bass;
+    let g_melody = deck.gain_melody;
     let effective_speed = (deck.speed_ratio + deck.nudge_offset).clamp(-4.0, 4.0);
-    let step = (buf.sample_rate as f64 / engine_rate as f64) * effective_speed as f64;
+    let step = (buf_arc.sample_rate as f64 / engine_rate as f64) * effective_speed as f64;
 
     for frame in out.chunks_mut(out_channels) {
         let pos_f = deck.playhead;
-        // Bounds: stop at either end of the track. Lower bound checks
-        // pos_f < 0.0 explicitly because `pos_f as usize` is undefined
-        // for negative floats on some targets.
         if pos_f < 0.0 {
             deck.playing = false;
             deck.playhead = 0.0;
@@ -1060,20 +1069,51 @@ fn render_deck(deck: &mut DeckState, out: &mut [f32], out_channels: usize, engin
         let i0 = pos * in_channels;
         let i1 = i0 + in_channels;
 
-        // Unit gain — EQ and master gain are applied in Mixer::render.
         if in_channels == 1 {
-            let s = samples[i0] * (1.0 - t) + samples[i1] * t;
+            let s = sample_at(samples, stems_arc.as_deref(), use_stems, i0, i1, t,
+                g_drums, g_bass, g_melody);
             for ch in frame.iter_mut() {
                 *ch += s;
             }
         } else {
             let n = out_channels.min(in_channels);
             for ch in 0..n {
-                let s = samples[i0 + ch] * (1.0 - t) + samples[i1 + ch] * t;
+                let s = sample_at(samples, stems_arc.as_deref(), use_stems,
+                    i0 + ch, i1 + ch, t, g_drums, g_bass, g_melody);
                 frame[ch] += s;
             }
         }
         deck.playhead += step;
+    }
+}
+
+/// Per-sample mix point — either the single-buffer linear interp, or
+/// the weighted sum of the four stems (vocals + other together as
+/// "melody"). Inlined; no allocations. Stem buffers are pre-validated
+/// to have the same channel layout as the source so the linear
+/// indexing works for both.
+#[inline]
+fn sample_at(
+    samples: &[f32],
+    stems: Option<&TrackStems>,
+    use_stems: bool,
+    i0: usize,
+    i1: usize,
+    t: f32,
+    g_drums: f32,
+    g_bass: f32,
+    g_melody: f32,
+) -> f32 {
+    if use_stems {
+        let s = stems.expect("use_stems => Some");
+        let inv = 1.0 - t;
+        let d = s.drums[i0] * inv + s.drums[i1] * t;
+        let b = s.bass[i0] * inv + s.bass[i1] * t;
+        let v = s.vocals[i0] * inv + s.vocals[i1] * t;
+        let o = s.other[i0] * inv + s.other[i1] * t;
+        d * g_drums + b * g_bass + (v + o) * g_melody
+    } else {
+        samples[i0] * (1.0 - t) + samples[i1] * t
     }
 }
 
@@ -1100,6 +1140,14 @@ fn render_deck_pv(deck: &mut DeckState, out: &mut [f32], out_channels: usize, en
     // fields (playhead, pvoc, playing) without lifetime conflicts.
     let buf_arc = Arc::clone(buf);
     let samples = &buf_arc.samples[..];
+    let stems_arc = deck.stems.as_ref().map(Arc::clone);
+    let use_stems = matches!(
+        stems_arc.as_deref(),
+        Some(s) if s.channels as usize == in_channels && s.frames() >= total_frames
+    );
+    let g_drums = deck.gain_drums;
+    let g_bass = deck.gain_bass;
+    let g_melody = deck.gain_melody;
     let src_step = buf_arc.sample_rate as f64 / engine_rate as f64;
     let total_out_frames = out.len() / out_channels;
     let mut written = 0;
@@ -1123,15 +1171,16 @@ fn render_deck_pv(deck: &mut DeckState, out: &mut [f32], out_channels: usize, en
                 let i0 = pos_i * in_channels;
                 let i1 = i0 + in_channels;
                 if in_channels == 1 {
-                    let s = samples[i0] * (1.0 - t) + samples[i1] * t;
+                    let s = sample_at(samples, stems_arc.as_deref(), use_stems,
+                        i0, i1, t, g_drums, g_bass, g_melody);
                     for c in 0..pv_channels {
                         deck.pvoc.input_buf[c][i] = s;
                     }
                 } else {
                     for c in 0..pv_channels {
                         let src_c = c.min(in_channels - 1);
-                        let s = samples[i0 + src_c] * (1.0 - t)
-                            + samples[i1 + src_c] * t;
+                        let s = sample_at(samples, stems_arc.as_deref(), use_stems,
+                            i0 + src_c, i1 + src_c, t, g_drums, g_bass, g_melody);
                         deck.pvoc.input_buf[c][i] = s;
                     }
                 }

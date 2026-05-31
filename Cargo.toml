@@ -21,7 +21,7 @@ toml = { workspace = true }
 
 [workspace]
 resolver = "2"
-members = ["crates/audio", "crates/decode", "crates/control", "crates/ui", "crates/analysis"]
+members = ["crates/audio", "crates/decode", "crates/control", "crates/ui", "crates/analysis", "crates/stems"]
 
 [workspace.package]
 edition = "2024"

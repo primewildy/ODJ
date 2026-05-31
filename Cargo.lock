@@ -2988,6 +2988,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "stems"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "control",
+ "decode",
+]
+
+[[package]]
 name = "strength_reduce"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3364,6 +3373,7 @@ dependencies = [
  "eframe",
  "egui_extras",
  "libc",
+ "stems",
 ]
 
 [[package]]

@@ -355,6 +355,9 @@ pub struct DjApp {
     load_tx: StdSender<LoadEvent>,
     midi_status: String,
     analysis_cache: Arc<AnalysisCache>,
+    /// Session-only stem cache. None if construction failed (in which
+    /// case stem separation is silently disabled for the session).
+    stem_cache: Option<Arc<stems::SessionCache>>,
     favourites: Favourites,
     favourites_only: bool,
     harmonic_filter: Option<DeckId>,
@@ -376,6 +379,13 @@ impl DjApp {
         let sender = engine.sender();
 
         let analysis_cache = Arc::new(AnalysisCache::load(&music_dir));
+        let stem_cache = match stems::SessionCache::new() {
+            Ok(c) => Some(Arc::new(c)),
+            Err(e) => {
+                eprintln!("stems: session cache unavailable, stems disabled: {e:#}");
+                None
+            }
+        };
         let favourites = Favourites::load(&music_dir);
         let analysis_progress = Arc::new(AtomicUsize::new(analysis_cache.count()));
         let analysis_total = tracks.len();
@@ -402,6 +412,7 @@ impl DjApp {
             load_tx,
             midi_status,
             analysis_cache,
+            stem_cache,
             favourites,
             favourites_only: false,
             harmonic_filter: None,
@@ -433,6 +444,7 @@ impl DjApp {
         let tx = self.load_tx.clone();
         let sender = self.sender.clone();
         let cache = Arc::clone(&self.analysis_cache);
+        let stem_cache = self.stem_cache.as_ref().map(Arc::clone);
         std::thread::spawn(move || {
             let buffer = match decode::load_to_buffer(&path) {
                 Ok(b) => b,
@@ -489,6 +501,27 @@ impl DjApp {
                 downbeats: initial_downbeats,
                 key: initial_key,
             }));
+
+            // Stem-separation worker. Runs in parallel with the
+            // analysis slow path — orthogonal jobs, both background.
+            // When it lands, push `SetStems` to the audio engine; the
+            // mixer swaps the deck's stem buffers in place without
+            // touching playhead / play state.
+            if let Some(sc) = stem_cache {
+                let path_s = path.clone();
+                let sender_s = sender.clone();
+                std::thread::spawn(move || {
+                    unsafe {
+                        libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+                    }
+                    match sc.separate(&path_s) {
+                        Ok(stems) => {
+                            let _ = sender_s.send(DeckCommand::SetStems { deck, stems });
+                        }
+                        Err(e) => eprintln!("stems: {} failed: {e:#}", path_s.display()),
+                    }
+                });
+            }
 
             // Slow path: if we didn't have a cache hit, run the full
             // analyser in the background. Once it lands, push the
