@@ -24,7 +24,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use anyhow::{Context, Result, anyhow, bail};
-use control::{CommandConsumer, CommandProducer, DeckCommand, DeckId, TrackAnalysis, TrackBuffer};
+use control::{
+    CommandConsumer, CommandProducer, DeckCommand, DeckId, TrackAnalysis, TrackBuffer, TrackStems,
+};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, SampleFormat, Stream, StreamConfig};
 
@@ -71,6 +73,12 @@ pub struct DeckTelemetry {
     pub eq_low_db: Arc<AtomicU32>,  // f32 bits
     pub eq_mid_db: Arc<AtomicU32>,  // f32 bits
     pub eq_high_db: Arc<AtomicU32>, // f32 bits
+    pub stem_drums: Arc<AtomicU32>, // f32 bits
+    pub stem_bass: Arc<AtomicU32>,  // f32 bits
+    pub stem_melody: Arc<AtomicU32>, // f32 bits
+    /// `true` once stem buffers have arrived for this deck's current
+    /// track. The UI uses this to grey out / activate the stem knobs.
+    pub stems_loaded: Arc<AtomicBool>,
     pub cue_on: Arc<AtomicBool>,
 }
 
@@ -87,6 +95,10 @@ impl DeckTelemetry {
             eq_low_db: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
             eq_mid_db: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
             eq_high_db: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
+            stem_drums: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
+            stem_bass: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
+            stem_melody: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
+            stems_loaded: Arc::new(AtomicBool::new(false)),
             cue_on: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -117,6 +129,18 @@ impl DeckTelemetry {
     }
     pub fn current_eq_mid_db(&self) -> f32 {
         f32::from_bits(self.eq_mid_db.load(Ordering::Relaxed))
+    }
+    pub fn current_stem_drums(&self) -> f32 {
+        f32::from_bits(self.stem_drums.load(Ordering::Relaxed))
+    }
+    pub fn current_stem_bass(&self) -> f32 {
+        f32::from_bits(self.stem_bass.load(Ordering::Relaxed))
+    }
+    pub fn current_stem_melody(&self) -> f32 {
+        f32::from_bits(self.stem_melody.load(Ordering::Relaxed))
+    }
+    pub fn are_stems_loaded(&self) -> bool {
+        self.stems_loaded.load(Ordering::Relaxed)
     }
     pub fn current_eq_high_db(&self) -> f32 {
         f32::from_bits(self.eq_high_db.load(Ordering::Relaxed))
@@ -439,6 +463,16 @@ struct DeckState {
     /// `playing` is true and toward 0.0 when paused. Prevents the
     /// audible click on play-start / pause.
     play_envelope: f32,
+    /// Stems for this track. `None` until the async stem worker
+    /// finishes (or stays `None` for tracks where stem separation
+    /// failed). When present, the mixer renders from these instead of
+    /// `buffer`, weighted by the three gain knobs below.
+    stems: Option<Arc<TrackStems>>,
+    /// Per-stem linear gain. 1.0 = unity. Clamped to [0.0, 1.5] by
+    /// the command handlers. melody = vocals + other summed.
+    gain_drums: f32,
+    gain_bass: f32,
+    gain_melody: f32,
 }
 
 impl DeckState {
@@ -466,6 +500,10 @@ impl DeckState {
             eq_high_db: 0.0,
             eq_sample_rate: engine_rate as f32,
             play_envelope: 0.0,
+            stems: None,
+            gain_drums: 1.0,
+            gain_bass: 1.0,
+            gain_melody: 1.0,
         }
     }
 }
@@ -573,6 +611,9 @@ impl Mixer {
                 // Reset envelope so a fresh load doesn't carry over
                 // residual fade-out from the previous track.
                 deck.play_envelope = 0.0;
+                // Drop previous track's stems — the worker will push
+                // fresh ones when separation completes.
+                deck.stems = None;
             }
             DeckCommand::UpdateAnalysis { analysis, .. } => {
                 // Slow-path arrival from the async analyser. Swap in
@@ -697,6 +738,18 @@ impl Mixer {
                 deck.eq_high_db = db.clamp(-25.0, 6.0);
                 deck.eq_high
                     .set_high_shelf(deck.eq_sample_rate, 4000.0, deck.eq_high_db);
+            }
+            DeckCommand::SetStemDrums { gain, .. } => {
+                deck.gain_drums = gain.clamp(0.0, 1.5);
+            }
+            DeckCommand::SetStemBass { gain, .. } => {
+                deck.gain_bass = gain.clamp(0.0, 1.5);
+            }
+            DeckCommand::SetStemMelody { gain, .. } => {
+                deck.gain_melody = gain.clamp(0.0, 1.5);
+            }
+            DeckCommand::SetStems { stems, .. } => {
+                deck.stems = Some(stems);
             }
             DeckCommand::SetBeatAlign { on, .. } => {
                 deck.beat_align = on;
@@ -887,6 +940,14 @@ fn publish_telemetry(deck: &DeckState, tel: &DeckTelemetry) {
         .store(deck.eq_mid_db.to_bits(), Ordering::Relaxed);
     tel.eq_high_db
         .store(deck.eq_high_db.to_bits(), Ordering::Relaxed);
+    tel.stem_drums
+        .store(deck.gain_drums.to_bits(), Ordering::Relaxed);
+    tel.stem_bass
+        .store(deck.gain_bass.to_bits(), Ordering::Relaxed);
+    tel.stem_melody
+        .store(deck.gain_melody.to_bits(), Ordering::Relaxed);
+    tel.stems_loaded
+        .store(deck.stems.is_some(), Ordering::Relaxed);
     tel.cue_on.store(deck.cue_on, Ordering::Relaxed);
 }
 
@@ -1098,6 +1159,10 @@ fn cmd_target(cmd: &DeckCommand) -> DeckId {
     match cmd {
         DeckCommand::LoadTrack { deck, .. }
         | DeckCommand::UpdateAnalysis { deck, .. }
+        | DeckCommand::SetStemDrums { deck, .. }
+        | DeckCommand::SetStemBass { deck, .. }
+        | DeckCommand::SetStemMelody { deck, .. }
+        | DeckCommand::SetStems { deck, .. }
         | DeckCommand::Play(deck)
         | DeckCommand::Pause(deck)
         | DeckCommand::PlayToggle(deck)

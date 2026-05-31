@@ -1085,9 +1085,9 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
             }
             ui.label(format!("{:.3}", speed));
         });
-        // Right: channel strip — knobs stacked, VOL fader directly
-        // below. Same column width on every widget so their centres
-        // sit on one vertical axis (left-aligned, no centring).
+        // Middle: EQ knob column — HIGH/MID/LOW stacked, VOL fader
+        // directly below. Same column width on every widget so their
+        // centres sit on one vertical axis.
         ui.vertical(|ui| {
             let cur_high = d.telemetry.current_eq_high_db();
             if let Some(v) = knob(ui, "HIGH", cur_high, -25.0..=6.0, KNOB_DIA) {
@@ -1115,6 +1115,31 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
                 let _ = sender.send(DeckCommand::SetGain { deck, gain });
             }
             ui.label(format!("{:.2}", gain));
+        });
+        // Right: stem-control column — DRUMS / BASS / MELODY mirroring
+        // the EQ layout. Knobs sit greyed-out until the async stem
+        // worker pushes buffers; dragging is allowed even when greyed
+        // so the user can pre-set gains for an in-progress mix.
+        let stems_ready = d.telemetry.are_stems_loaded();
+        ui.vertical(|ui| {
+            let drums_lbl = if stems_ready { "DRUMS" } else { "drums…" };
+            let bass_lbl = if stems_ready { "BASS" } else { "bass…" };
+            let mel_lbl = if stems_ready { "MELODY" } else { "melody…" };
+            let cur_drums = d.telemetry.current_stem_drums();
+            if let Some(v) = knob(ui, drums_lbl, cur_drums, 0.0..=1.5, KNOB_DIA) {
+                let _ = sender.send(DeckCommand::SetStemDrums { deck, gain: v });
+            }
+            let cur_bass = d.telemetry.current_stem_bass();
+            if let Some(v) = knob(ui, bass_lbl, cur_bass, 0.0..=1.5, KNOB_DIA) {
+                let _ = sender.send(DeckCommand::SetStemBass { deck, gain: v });
+            }
+            let cur_mel = d.telemetry.current_stem_melody();
+            if let Some(v) = knob(ui, mel_lbl, cur_mel, 0.0..=1.5, KNOB_DIA) {
+                let _ = sender.send(DeckCommand::SetStemMelody { deck, gain: v });
+            }
+            // Padding so this column's vertical extent matches the
+            // EQ column (VOL fader + value label below).
+            ui.add_space(6.0 + 16.0 + FADER_H + 16.0);
         });
     });
 }

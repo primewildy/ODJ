@@ -33,6 +33,26 @@ impl TrackBuffer {
     }
 }
 
+/// Four HTDemucs stems for a single track, all interleaved at the same
+/// sample-rate / channel layout as the source `TrackBuffer`. The mixer
+/// reads them via an `Arc<TrackStems>` so the async stem worker can
+/// hand off without copying audio. The UI exposes only 3 controls;
+/// vocals + other are summed at playback as "melody".
+pub struct TrackStems {
+    pub drums: Vec<f32>,
+    pub bass: Vec<f32>,
+    pub vocals: Vec<f32>,
+    pub other: Vec<f32>,
+    pub channels: u16,
+    pub sample_rate: u32,
+}
+
+impl TrackStems {
+    pub fn frames(&self) -> usize {
+        self.drums.len() / self.channels.max(1) as usize
+    }
+}
+
 /// Per-track analysis. v1 fills `bpm` + `beat_grid` (spectral-flux + autocorr)
 /// + `key` (Krumhansl-Schmuckler).
 /// v1.5 will fill `downbeats`, `phrase_boundaries`, `auto_cue`. The audio
@@ -133,6 +153,19 @@ pub enum DeckCommand {
     SetEqMid { deck: DeckId, db: f32 },
     /// High-shelf gain in dB. Typical -25..+6, 0 = flat. Shelf at 4 kHz.
     SetEqHigh { deck: DeckId, db: f32 },
+    /// Per-deck stem gains. Linear 0.0..=1.0+. Default 1.0 (unity).
+    /// "melody" = vocals + other summed at playback (see
+    /// docs/notes/stem_separation.md for the 4-stem-source / 3-control
+    /// rationale). No-op until the deck's stem buffers are loaded.
+    SetStemDrums { deck: DeckId, gain: f32 },
+    SetStemBass { deck: DeckId, gain: f32 },
+    SetStemMelody { deck: DeckId, gain: f32 },
+    /// Replace the deck's stem buffers without resetting playback. Sent
+    /// by the async stem-separation worker when results land.
+    SetStems {
+        deck: DeckId,
+        stems: Arc<TrackStems>,
+    },
     /// Match this deck's tempo to the OTHER deck's effective BPM. Clamped
     /// to ±8%. No-op if either deck's analysis BPM is missing.
     Sync { deck: DeckId },
