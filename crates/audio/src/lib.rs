@@ -750,12 +750,14 @@ impl Mixer {
             }
             DeckCommand::SetStems { stems, .. } => {
                 if let Some(buf) = deck.buffer.as_ref() {
+                    let ch_ok = stems.channels as usize == buf.channels as usize;
+                    let len_ok = stems.frames() + (stems.sample_rate as usize)
+                        >= buf.frames();
                     eprintln!(
-                        "audio: SetStems — buf {} fr @ {} Hz {} ch | stems {} fr @ {} Hz {} ch | match? {}",
+                        "audio: SetStems — buf {} fr @ {} Hz {} ch | stems {} fr @ {} Hz {} ch | will use? {}",
                         buf.frames(), buf.sample_rate, buf.channels,
                         stems.frames(), stems.sample_rate, stems.channels,
-                        stems.channels as usize == buf.channels as usize
-                            && stems.frames() >= buf.frames(),
+                        ch_ok && len_ok,
                     );
                 } else {
                     eprintln!("audio: SetStems with no buffer loaded — dropping");
