@@ -336,6 +336,27 @@ fn run_downbeat_window(
     if beats.is_empty() {
         return Ok(Vec::new());
     }
+
+    // Phantom-beat short circuit: the DSP picks a constant tempo + a
+    // global phase, which means the beat grid is extended backwards
+    // into any silent intro. The "first" few beats can sit in audible
+    // silence — phantom positions where the period happens to land.
+    // Whenever we see this, the FIRST audible beat is by overwhelming
+    // convention bar position 1, so the bar offset is just the count
+    // of silent leading beats modulo 4. No model needed.
+    let n_silent = leading_silent_beats(beats, env, env_fps);
+    if n_silent > 0 {
+        let mod_offset = n_silent % 4;
+        eprintln!(
+            "analysis: trimming {} silent leading beats, mod_offset = {}",
+            n_silent, mod_offset
+        );
+        return Ok((0..beats.len())
+            .filter(|i| i % 4 == mod_offset)
+            .map(|i| i as u32)
+            .collect());
+    }
+
     const WINDOW_SECS: f64 = (downbeat::CHUNK as f64) / 50.0; // CHUNK frames at 50 fps = 30 s
 
     let window_start_secs = best_window_start(env, env_fps, WINDOW_SECS);
@@ -516,6 +537,38 @@ fn phrase_boundary_offset(beats: &[f64], env: &[f32], env_fps: f32) -> Option<us
     } else {
         None
     }
+}
+
+/// Counts how many leading DSP beats fall in silence — env value at the
+/// beat's time is below 10 % of the track-wide mean envelope. Used to
+/// detect tracks where the DSP autocorr propagates the beat period
+/// *backwards* into a silent intro, generating phantom beats before the
+/// real music begins. The first non-silent beat is the actual bar-1
+/// downbeat, so its index modulo 4 is the correct bar phase — no
+/// model call needed.
+fn leading_silent_beats(beats: &[f64], env: &[f32], env_fps: f32) -> usize {
+    if env.is_empty() {
+        return 0;
+    }
+    let mean = env.iter().sum::<f32>() / env.len() as f32;
+    let threshold = mean * 0.10;
+    let radius = (env_fps * 0.1) as usize;
+    let mut n = 0;
+    for &b in beats {
+        let idx = (b as f32 * env_fps).round() as usize;
+        let lo = idx.saturating_sub(radius);
+        let hi = (idx + radius + 1).min(env.len());
+        let local_max = env[lo..hi]
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        if local_max < threshold {
+            n += 1;
+        } else {
+            break;
+        }
+    }
+    n
 }
 
 /// True iff `beats[0]`'s position in the spectral-flux envelope is in
