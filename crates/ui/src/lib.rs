@@ -233,8 +233,22 @@ fn compute_hires_peaks(buf: &TrackBuffer, samples_per_peak: usize) -> Vec<f32> {
     out
 }
 
-struct LoadResult {
+enum LoadEvent {
+    /// First message after decode + waveform compute. Carries the
+    /// `path` so the deck can identify any subsequent `Refined`.
+    /// Beats/downbeats may be empty when the track wasn't cached and
+    /// the background analyser hasn't finished yet.
+    Initial(LoadInitial),
+    /// Second message, only sent for tracks that missed the cache.
+    /// Carries the refined beat grid + downbeats once the model has
+    /// completed. The UI drops it if `path` no longer matches the
+    /// deck's current track.
+    Refined(AnalysisRefined),
+}
+
+struct LoadInitial {
     deck: DeckId,
+    path: PathBuf,
     title: String,
     overview: Vec<f32>,
     hires: Vec<f32>,
@@ -247,8 +261,22 @@ struct LoadResult {
     key: Option<MusicalKey>,
 }
 
+struct AnalysisRefined {
+    deck: DeckId,
+    path: PathBuf,
+    bpm: f32,
+    beat_grid: Vec<f64>,
+    downbeats: Vec<u32>,
+    key: Option<MusicalKey>,
+}
+
 struct DeckUi {
     title: Option<String>,
+    /// Filesystem path of whatever's currently on the deck. Used to
+    /// validate that a late-arriving `Refined` event is still
+    /// relevant — if the user loaded a different track in the
+    /// meantime, the refined grid is dropped on the floor.
+    loaded_path: Option<PathBuf>,
     overview: Vec<f32>,
     hires: Vec<f32>,
     samples_per_hires: usize,
@@ -271,6 +299,7 @@ impl DeckUi {
     fn new(telemetry: DeckTelemetry) -> Self {
         Self {
             title: None,
+            loaded_path: None,
             overview: Vec::new(),
             hires: Vec::new(),
             samples_per_hires: HIRES_SAMPLES_PER_PEAK,
@@ -309,8 +338,8 @@ pub struct DjApp {
     genre_filter: Option<String>,
     deck_a: DeckUi,
     deck_b: DeckUi,
-    load_rx: Receiver<LoadResult>,
-    load_tx: StdSender<LoadResult>,
+    load_rx: Receiver<LoadEvent>,
+    load_tx: StdSender<LoadEvent>,
     midi_status: String,
     analysis_cache: Arc<AnalysisCache>,
     favourites: Favourites,
@@ -405,52 +434,89 @@ impl DjApp {
             let sample_rate = buffer.sample_rate;
             let duration_secs = buffer.duration_secs();
 
-            // Use cached analysis if available, else compute now (which
-            // also writes back to the cache).
-            let (bpm, beat_grid, downbeats, key) = if let Some(c) = cache.get(&path) {
-                (c.bpm, c.beats, c.downbeats, c.key)
-            } else {
-                let r = analysis::analyse(&buffer);
-                let entry = CachedAnalysis {
-                    bpm: r.bpm,
-                    key: r.key,
-                    beats: r.beat_grid.clone(),
-                    downbeats: r.downbeats.clone(),
-                    version: r.analysis_version,
+            // Fast path: if the track is cached at v2 (or any version
+            // we accept), use that and skip the slow analyser. The
+            // worker thread will eventually upgrade legacy entries.
+            let cached = cache.get(&path);
+            let (initial_bpm, initial_beats, initial_downbeats, initial_key) =
+                if let Some(c) = cached.as_ref() {
+                    (c.bpm, c.beats.clone(), c.downbeats.clone(), c.key)
+                } else {
+                    // No cache — load the track with an empty grid so
+                    // the user can start playing immediately. Slow
+                    // path below fills in the real analysis.
+                    (0.0, Vec::new(), Vec::new(), None)
                 };
-                cache.insert(path.clone(), entry);
-                (r.bpm, r.beat_grid, r.downbeats, r.key)
-            };
-            let analysis = Arc::new(TrackAnalysis {
-                analysis_version: 2,
-                bpm,
-                beat_grid: beat_grid.clone(),
-                downbeats: downbeats.clone(),
+            let initial_analysis = Arc::new(TrackAnalysis {
+                analysis_version: cached.as_ref().map(|c| c.version).unwrap_or(0),
+                bpm: initial_bpm,
+                beat_grid: initial_beats.clone(),
+                downbeats: initial_downbeats.clone(),
                 duration_secs,
                 sample_rate,
-                key,
+                key: initial_key,
             });
 
-            // Engine receives both buffer and analysis; UI receives overview
-            // + hires + beats for drawing.
             let _ = sender.send(DeckCommand::LoadTrack {
                 deck,
-                buffer,
-                analysis,
+                buffer: Arc::clone(&buffer),
+                analysis: initial_analysis,
             });
-            let _ = tx.send(LoadResult {
+            let _ = tx.send(LoadEvent::Initial(LoadInitial {
                 deck,
+                path: path.clone(),
                 title: name,
                 overview,
                 hires,
                 samples_per_hires: HIRES_SAMPLES_PER_PEAK,
                 total_frames,
                 sample_rate,
-                bpm,
-                beat_grid,
-                downbeats,
-                key,
-            });
+                bpm: initial_bpm,
+                beat_grid: initial_beats,
+                downbeats: initial_downbeats,
+                key: initial_key,
+            }));
+
+            // Slow path: if we didn't have a cache hit, run the full
+            // analyser in the background. Once it lands, push the
+            // refined grid to both audio engine + UI.
+            if cached.is_none() {
+                let cache_slow = Arc::clone(&cache);
+                let sender_slow = sender.clone();
+                let tx_slow = tx.clone();
+                std::thread::spawn(move || {
+                    let r = analysis::analyse(&buffer);
+                    let entry = CachedAnalysis {
+                        bpm: r.bpm,
+                        key: r.key,
+                        beats: r.beat_grid.clone(),
+                        downbeats: r.downbeats.clone(),
+                        version: r.analysis_version,
+                    };
+                    cache_slow.insert(path.clone(), entry);
+                    let refined = Arc::new(TrackAnalysis {
+                        analysis_version: r.analysis_version,
+                        bpm: r.bpm,
+                        beat_grid: r.beat_grid.clone(),
+                        downbeats: r.downbeats.clone(),
+                        duration_secs,
+                        sample_rate,
+                        key: r.key,
+                    });
+                    let _ = sender_slow.send(DeckCommand::UpdateAnalysis {
+                        deck,
+                        analysis: refined,
+                    });
+                    let _ = tx_slow.send(LoadEvent::Refined(AnalysisRefined {
+                        deck,
+                        path,
+                        bpm: r.bpm,
+                        beat_grid: r.beat_grid,
+                        downbeats: r.downbeats,
+                        key: r.key,
+                    }));
+                });
+            }
         });
     }
 
@@ -677,19 +743,36 @@ impl DjApp {
     }
 
     fn drain_loads(&mut self) {
-        while let Ok(res) = self.load_rx.try_recv() {
-            let d = self.deck_mut(res.deck);
-            d.title = Some(res.title);
-            d.overview = res.overview;
-            d.hires = res.hires;
-            d.samples_per_hires = res.samples_per_hires;
-            d.total_frames = res.total_frames;
-            d.sample_rate = res.sample_rate;
-            d.bpm = res.bpm;
-            d.beat_grid = res.beat_grid;
-            d.downbeats = res.downbeats;
-            d.key = res.key;
-            d.loading = false;
+        while let Ok(event) = self.load_rx.try_recv() {
+            match event {
+                LoadEvent::Initial(res) => {
+                    let d = self.deck_mut(res.deck);
+                    d.title = Some(res.title);
+                    d.loaded_path = Some(res.path);
+                    d.overview = res.overview;
+                    d.hires = res.hires;
+                    d.samples_per_hires = res.samples_per_hires;
+                    d.total_frames = res.total_frames;
+                    d.sample_rate = res.sample_rate;
+                    d.bpm = res.bpm;
+                    d.beat_grid = res.beat_grid;
+                    d.downbeats = res.downbeats;
+                    d.key = res.key;
+                    d.loading = false;
+                }
+                LoadEvent::Refined(r) => {
+                    // Drop the refined result if the user has already
+                    // loaded a different track onto this deck.
+                    let d = self.deck_mut(r.deck);
+                    if d.loaded_path.as_deref() != Some(r.path.as_path()) {
+                        continue;
+                    }
+                    d.bpm = r.bpm;
+                    d.beat_grid = r.beat_grid;
+                    d.downbeats = r.downbeats;
+                    d.key = r.key;
+                }
+            }
         }
     }
 }

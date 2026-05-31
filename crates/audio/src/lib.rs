@@ -571,6 +571,29 @@ impl Mixer {
                 // residual fade-out from the previous track.
                 deck.play_envelope = 0.0;
             }
+            DeckCommand::UpdateAnalysis { analysis, .. } => {
+                // Slow-path arrival from the async analyser. Swap in
+                // the refined beat grid + downbeats without touching
+                // the playhead / play state — the user may already
+                // have started playing the track. If the cue point
+                // is still at t=0 (i.e. the deck loaded without
+                // downbeats), snap it to the first downbeat now so
+                // CUE works correctly.
+                if deck.cue_frame == 0 {
+                    if let Some(&i) = analysis.downbeats.first() {
+                        if let Some(&t) = analysis.beat_grid.get(i as usize) {
+                            let s = t * analysis.sample_rate as f64;
+                            if s.is_finite() && s >= 0.0 {
+                                deck.cue_frame = s as u64;
+                                if !deck.playing && deck.playhead == 0.0 {
+                                    deck.playhead = s;
+                                }
+                            }
+                        }
+                    }
+                }
+                deck.analysis = Some(analysis);
+            }
             DeckCommand::Play(_) => {
                 deck.playing = true;
                 deck.in_preview = false;
@@ -1071,6 +1094,7 @@ fn render_deck_pv(deck: &mut DeckState, out: &mut [f32], out_channels: usize, en
 fn cmd_target(cmd: &DeckCommand) -> DeckId {
     match cmd {
         DeckCommand::LoadTrack { deck, .. }
+        | DeckCommand::UpdateAnalysis { deck, .. }
         | DeckCommand::Play(deck)
         | DeckCommand::Pause(deck)
         | DeckCommand::PlayToggle(deck)

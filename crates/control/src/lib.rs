@@ -86,6 +86,14 @@ pub enum DeckCommand {
         buffer: Arc<TrackBuffer>,
         analysis: Arc<TrackAnalysis>,
     },
+    /// Replace the deck's analysis without resetting playback state.
+    /// Used by the async load path — the deck initially loads with
+    /// whatever analysis we have (cache or empty), and a background
+    /// thread sends `UpdateAnalysis` once the model has finished.
+    UpdateAnalysis {
+        deck: DeckId,
+        analysis: Arc<TrackAnalysis>,
+    },
     Play(DeckId),
     Pause(DeckId),
     /// Toggle play <-> pause. Engine is authoritative — producers don't need
