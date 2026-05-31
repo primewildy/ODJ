@@ -39,7 +39,7 @@ fn spawn_analysis_worker(
     }
     std::thread::spawn(move || {
         for path in tracks {
-            if cache.contains(&path) {
+            if cache.is_current(&path) {
                 continue;
             }
             let Ok(buffer) = decode::load_to_buffer(&path) else {
@@ -53,6 +53,8 @@ fn spawn_analysis_worker(
                     bpm: r.bpm,
                     key: r.key,
                     beats: r.beat_grid,
+                    downbeats: r.downbeats,
+                    version: r.analysis_version,
                 },
             );
             progress.fetch_add(1, Ordering::Relaxed);
@@ -241,6 +243,7 @@ struct LoadResult {
     sample_rate: u32,
     bpm: f32,
     beat_grid: Vec<f64>,
+    downbeats: Vec<u32>,
     key: Option<MusicalKey>,
 }
 
@@ -253,6 +256,10 @@ struct DeckUi {
     sample_rate: u32,
     bpm: f32,
     beat_grid: Vec<f64>,
+    /// Indices into `beat_grid` of bar-position-1 downbeats. Empty
+    /// when the cache entry pre-dates v2 — the waveform renderer then
+    /// falls back to `i % 4 == 0`.
+    downbeats: Vec<u32>,
     key: Option<MusicalKey>,
     telemetry: DeckTelemetry,
     quantize: bool,
@@ -271,6 +278,7 @@ impl DeckUi {
             sample_rate: 0,
             bpm: 0.0,
             beat_grid: Vec::new(),
+            downbeats: Vec::new(),
             key: None,
             telemetry,
             quantize: true,
@@ -399,22 +407,25 @@ impl DjApp {
 
             // Use cached analysis if available, else compute now (which
             // also writes back to the cache).
-            let (bpm, beat_grid, key) = if let Some(c) = cache.get(&path) {
-                (c.bpm, c.beats, c.key)
+            let (bpm, beat_grid, downbeats, key) = if let Some(c) = cache.get(&path) {
+                (c.bpm, c.beats, c.downbeats, c.key)
             } else {
                 let r = analysis::analyse(&buffer);
                 let entry = CachedAnalysis {
                     bpm: r.bpm,
                     key: r.key,
                     beats: r.beat_grid.clone(),
+                    downbeats: r.downbeats.clone(),
+                    version: r.analysis_version,
                 };
                 cache.insert(path.clone(), entry);
-                (r.bpm, r.beat_grid, r.key)
+                (r.bpm, r.beat_grid, r.downbeats, r.key)
             };
             let analysis = Arc::new(TrackAnalysis {
-                analysis_version: 1,
+                analysis_version: 2,
                 bpm,
                 beat_grid: beat_grid.clone(),
+                downbeats: downbeats.clone(),
                 duration_secs,
                 sample_rate,
                 key,
@@ -437,6 +448,7 @@ impl DjApp {
                 sample_rate,
                 bpm,
                 beat_grid,
+                downbeats,
                 key,
             });
         });
@@ -675,6 +687,7 @@ impl DjApp {
             d.sample_rate = res.sample_rate;
             d.bpm = res.bpm;
             d.beat_grid = res.beat_grid;
+            d.downbeats = res.downbeats;
             d.key = res.key;
             d.loading = false;
         }
@@ -938,16 +951,25 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
     ui.add_space(6.0);
 
     // Channel-strip layout — like a real DJ mixer. Pitch fader on the
-    // left (traditionally a "deck" control), then the channel strip on
-    // the right: HIGH / MID / LOW knobs stacked above the VOL fader.
-    ui.horizontal(|ui| {
+    // left, then the channel strip on the right: HIGH / MID / LOW
+    // knobs stacked above the VOL fader. The pitch fader is offset
+    // down by the knobs' total height so its top sits level with the
+    // vol fader's top — the eye can read them as a horizontal pair.
+    const KNOB_DIA: f32 = 50.0;
+    const KNOB_FOOTPRINT: f32 = KNOB_DIA + 8.0; // knob() pads ±4 px
+    const FADER_H: f32 = 150.0;
+    // 3× knob row heights (14 label + 50 dia + 14 value = 78) + the
+    // 6 px spacer that follows the LOW knob.
+    const KNOB_STACK_H: f32 = 3.0 * 78.0 + 6.0;
+    ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 24.0;
-        // Left: PITCH.
+        // Left: PITCH. Pushed down to line up with VOL on the right.
         ui.vertical(|ui| {
+            ui.add_space(KNOB_STACK_H);
             ui.label("PITCH");
             let mut speed = d.telemetry.current_speed();
             let r = ui.add_sized(
-                [50.0, 240.0],
+                [KNOB_FOOTPRINT, FADER_H],
                 egui::Slider::new(&mut speed, PITCH_MIN..=PITCH_MAX)
                     .vertical()
                     .fixed_decimals(3)
@@ -958,30 +980,27 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
             }
             ui.label(format!("{:.3}", speed));
         });
-        // Right: EQ knobs stacked above VOL fader. vertical_centered
-        // aligns each child on a single vertical axis so the vol fader
-        // sits dead under the knobs' centre line.
-        ui.vertical_centered(|ui| {
+        // Right: channel strip — knobs stacked, VOL fader directly
+        // below. Same column width on every widget so their centres
+        // sit on one vertical axis (left-aligned, no centring).
+        ui.vertical(|ui| {
             let cur_high = d.telemetry.current_eq_high_db();
-            if let Some(v) = knob(ui, "HIGH", cur_high, -25.0..=6.0, 50.0) {
+            if let Some(v) = knob(ui, "HIGH", cur_high, -25.0..=6.0, KNOB_DIA) {
                 let _ = sender.send(DeckCommand::SetEqHigh { deck, db: v });
             }
             let cur_mid = d.telemetry.current_eq_mid_db();
-            if let Some(v) = knob(ui, "MID", cur_mid, -25.0..=6.0, 50.0) {
+            if let Some(v) = knob(ui, "MID", cur_mid, -25.0..=6.0, KNOB_DIA) {
                 let _ = sender.send(DeckCommand::SetEqMid { deck, db: v });
             }
             let cur_low = d.telemetry.current_eq_low_db();
-            if let Some(v) = knob(ui, "LOW", cur_low, -25.0..=6.0, 50.0) {
+            if let Some(v) = knob(ui, "LOW", cur_low, -25.0..=6.0, KNOB_DIA) {
                 let _ = sender.send(DeckCommand::SetEqLow { deck, db: v });
             }
             ui.add_space(6.0);
             ui.label("VOL");
             let mut gain = d.telemetry.current_gain();
-            // Match the knob's overall footprint (50 dia + 4 pad each
-            // side = 58 px) so the fader's bounding box centres on the
-            // same axis as the knobs above.
             let r = ui.add_sized(
-                [58.0, 130.0],
+                [KNOB_FOOTPRINT, FADER_H],
                 egui::Slider::new(&mut gain, 0.0..=1.0)
                     .vertical()
                     .fixed_decimals(2)
@@ -1218,9 +1237,14 @@ fn zoom_view(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
                 break;
             }
             let x = t_to_x(t);
-            // Every 4th beat presumed downbeat (4/4 assumption; real
-            // downbeat detection lands in v1.5).
-            let is_downbeat = i % 4 == 0;
+            // Use model-derived downbeats when present (v2 cache);
+            // fall back to "every 4th beat" for pre-v2 entries that
+            // haven't been re-analysed yet.
+            let is_downbeat = if d.downbeats.is_empty() {
+                i % 4 == 0
+            } else {
+                d.downbeats.binary_search(&(i as u32)).is_ok()
+            };
             let (col, stroke_w) = if is_downbeat {
                 (Color32::from_rgb(220, 220, 220), 1.5)
             } else {

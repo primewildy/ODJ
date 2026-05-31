@@ -8,3 +8,6 @@ control = { path = "../control" }
 rustfft = { workspace = true }
 anyhow = { workspace = true }
 tract-onnx = { workspace = true }
+
+[dev-dependencies]
+decode = { path = "../decode" }

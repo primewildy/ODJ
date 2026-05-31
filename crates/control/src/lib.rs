@@ -42,6 +42,11 @@ pub struct TrackAnalysis {
     pub bpm: f32,
     /// Beat times in seconds from start of the track.
     pub beat_grid: Vec<f64>,
+    /// Indices into `beat_grid` of beat-position-1 downbeats. Empty for
+    /// v1-cache entries that pre-date model-driven detection — in that
+    /// case the UI falls back to `i % 4 == 0`. Populated by the
+    /// beat_this ONNX model from v2 onwards.
+    pub downbeats: Vec<u32>,
     pub duration_secs: f64,
     pub sample_rate: u32,
     /// Detected musical key; None if detection failed or the signal is

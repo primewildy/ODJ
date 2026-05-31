@@ -19,12 +19,21 @@ use control::{MusicalKey, TrackBuffer};
 use rustfft::{FftPlanner, num_complex::Complex};
 
 pub mod downbeat;
+pub mod logmel;
 
 pub struct AnalysisResult {
     pub bpm: f32,
     /// Beat times in seconds from the start of the track.
     pub beat_grid: Vec<f64>,
+    /// Indices into `beat_grid` of bar-position-1 downbeats. Populated
+    /// by the beat_this ONNX model when the cached weights are present;
+    /// empty when the model is unavailable (caller falls back to
+    /// `i % 4 == 0`).
+    pub downbeats: Vec<u32>,
     pub key: Option<MusicalKey>,
+    /// Schema version of this result. Bumped when we change what we
+    /// compute (1 = DSP only; 2 = adds model-derived downbeats).
+    pub analysis_version: u32,
 }
 
 /// Krumhansl-Kessler key profiles (major + minor in C, rotated for other tonics).
@@ -50,7 +59,9 @@ pub fn analyse(buf: &TrackBuffer) -> AnalysisResult {
         return AnalysisResult {
             bpm: 0.0,
             beat_grid: Vec::new(),
+            downbeats: Vec::new(),
             key: None,
+            analysis_version: 1,
         };
     }
 
@@ -75,7 +86,9 @@ pub fn analyse(buf: &TrackBuffer) -> AnalysisResult {
         return AnalysisResult {
             bpm: 0.0,
             beat_grid: Vec::new(),
+            downbeats: Vec::new(),
             key: None,
+            analysis_version: 1,
         };
     }
 
@@ -278,10 +291,173 @@ pub fn analyse(buf: &TrackBuffer) -> AnalysisResult {
     // 7. Key detection: correlate normalised chroma with all 24 key profiles.
     let key = detect_key(&chroma);
 
-    AnalysisResult {
-        bpm,
-        beat_grid: beats,
-        key,
+    // 8. Downbeat detection via beat_this. Rather than running the
+    //    model over the entire track (slow on CPU, and most of the
+    //    track is redundant for bar-phase purposes), we pick the
+    //    busiest 30 s window (1 chunk @ 50 fps) using the existing
+    //    spectral-flux envelope as a beat-density score, run a single
+    //    forward pass there, then back-project the bar phase across
+    //    the full DSP beat grid under the 4/4 + constant-BPM
+    //    assumption (good for ~all dance music).
+    match run_downbeat_window(buf, &env, frame_rate, &beats) {
+        Ok(downbeats) => AnalysisResult {
+            bpm,
+            beat_grid: beats,
+            downbeats,
+            key,
+            analysis_version: 2,
+        },
+        Err(e) => {
+            // Log once. Pre-format so the worker thread's stderr isn't
+            // chatty about the same missing file for every track.
+            log_model_unavailable(&e);
+            AnalysisResult {
+                bpm,
+                beat_grid: beats,
+                downbeats: Vec::new(),
+                key,
+                analysis_version: 1,
+            }
+        }
+    }
+}
+
+/// Pick the busiest 30 s window in the track (using the DSP envelope
+/// as a beat-density score so we land on a kick-snare section instead
+/// of an intro / breakdown / outro), run a single model forward pass
+/// there to find the bar phase, then back-project across the DSP
+/// beat grid to derive downbeat indices for the whole track.
+fn run_downbeat_window(
+    buf: &TrackBuffer,
+    env: &[f32],
+    env_fps: f32,
+    beats: &[f64],
+) -> anyhow::Result<Vec<u32>> {
+    if beats.is_empty() {
+        return Ok(Vec::new());
+    }
+    const WINDOW_SECS: f64 = (downbeat::CHUNK as f64) / 50.0; // CHUNK frames at 50 fps = 30 s
+
+    let window_start_secs = best_window_start(env, env_fps, WINDOW_SECS);
+
+    let ch = buf.channels.max(1) as usize;
+    let n_frames_buf = buf.frames();
+    let sr = buf.sample_rate as f64;
+    let start_sample = ((window_start_secs * sr) as usize).min(n_frames_buf);
+    let end_sample =
+        (((window_start_secs + WINDOW_SECS) * sr) as usize).min(n_frames_buf);
+    let window_audio = &buf.samples[start_sample * ch..end_sample * ch];
+    let resampled = resample_to_22050_mono(window_audio, buf.sample_rate, buf.channels);
+
+    // Log-mel — pad / truncate to exactly CHUNK frames so the static
+    // ONNX input shape (1, 1500, 128) is satisfied.
+    let lm = logmel::LogMel::new();
+    let mut mel = lm.compute(&resampled);
+    let mel_target = downbeat::chunk_n_frames() * logmel::N_MELS;
+    if mel.len() < mel_target {
+        mel.resize(mel_target, 0.0);
+    } else if mel.len() > mel_target {
+        mel.truncate(mel_target);
+    }
+
+    let phase = downbeat::infer_window_bar_phase(&mel)?;
+    let Some(secs_into_window) = phase.first_downbeat_secs else {
+        // Sparse window — model couldn't lock a bar phase. Bail to
+        // legacy i%4 behaviour rather than guess.
+        return Ok(Vec::new());
+    };
+    let downbeat_global_secs = window_start_secs + secs_into_window;
+
+    // Find the DSP beat index whose time is closest to the model's
+    // first detected downbeat. Its `% 4` gives the bar phase for the
+    // whole track.
+    let mut nearest = 0usize;
+    let mut best = f64::INFINITY;
+    for (i, &t) in beats.iter().enumerate() {
+        let d = (t - downbeat_global_secs).abs();
+        if d < best {
+            best = d;
+            nearest = i;
+        }
+    }
+    let mod_offset = nearest % 4;
+
+    Ok((0..beats.len())
+        .filter(|i| i % 4 == mod_offset)
+        .map(|i| i as u32)
+        .collect())
+}
+
+/// Sliding-window scan over the spectral-flux envelope. Returns the
+/// start (in seconds) of the `window_secs`-long span with the highest
+/// mean envelope — i.e. the section with the most onset energy, which
+/// is the bit of the track with the clearest beat to lock onto.
+fn best_window_start(env: &[f32], env_fps: f32, window_secs: f64) -> f64 {
+    let window_frames = (window_secs as f32 * env_fps).round() as usize;
+    if env.len() <= window_frames || window_frames == 0 {
+        return 0.0;
+    }
+    // Step 1 s — finer resolution doesn't change the chosen section
+    // and 1 s of slop in the start is irrelevant for a 30 s window.
+    let step = (env_fps as usize).max(1);
+    let mut running: f32 = env[..window_frames].iter().sum();
+    let mut best_score = running;
+    let mut best_start = 0usize;
+    let mut i = 0;
+    while i + window_frames + step <= env.len() {
+        // Slide by `step` frames; subtract leaving, add entering.
+        for k in 0..step {
+            running -= env[i + k];
+            running += env[i + window_frames + k];
+        }
+        i += step;
+        if running > best_score {
+            best_score = running;
+            best_start = i;
+        }
+    }
+    best_start as f64 / env_fps as f64
+}
+
+/// Linear-interpolation resampler to mono @ 22050 Hz. Good enough for
+/// the analysis pass — model is robust to small spectral artefacts.
+fn resample_to_22050_mono(samples: &[f32], src_sr: u32, src_ch: u16) -> Vec<f32> {
+    let ch = src_ch.max(1) as usize;
+    let n_in = samples.len() / ch;
+    if n_in == 0 {
+        return Vec::new();
+    }
+    if src_sr == logmel::SR && ch == 1 {
+        return samples.to_vec();
+    }
+    let ratio = src_sr as f64 / logmel::SR as f64;
+    let n_out = ((n_in as f64) / ratio).floor() as usize;
+    let mut out = Vec::with_capacity(n_out);
+    for i in 0..n_out {
+        let src_pos = i as f64 * ratio;
+        let lo = src_pos.floor() as usize;
+        let hi = (lo + 1).min(n_in - 1);
+        let t = (src_pos - lo as f64) as f32;
+        let mut a = 0.0f32;
+        let mut b = 0.0f32;
+        for c in 0..ch {
+            a += samples[lo * ch + c];
+            b += samples[hi * ch + c];
+        }
+        out.push(((1.0 - t) * a + t * b) / ch as f32);
+    }
+    out
+}
+
+/// Rate-limited stderr warning for a missing/broken model. Worker
+/// scans hundreds of tracks; we don't want one warning per track.
+fn log_model_unavailable(err: &anyhow::Error) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::SeqCst) {
+        eprintln!(
+            "analysis: downbeat model unavailable, falling back to DSP grid: {err:#}"
+        );
     }
 }
 

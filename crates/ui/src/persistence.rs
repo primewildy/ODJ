@@ -59,11 +59,24 @@ impl Favourites {
     }
 }
 
+/// Latest schema version we accept from `.analysis-cache`. Entries
+/// older than this get dropped at load time (and re-analysed by the
+/// background worker on the next launch).
+pub const CACHE_VERSION: u32 = 2;
+
 #[derive(Clone, Debug)]
 pub struct CachedAnalysis {
     pub bpm: f32,
     pub key: Option<MusicalKey>,
     pub beats: Vec<f64>,
+    /// Indices into `beats` of bar-position-1 downbeats. Empty for
+    /// pre-v2 entries (the worker re-analyses them on next launch).
+    pub downbeats: Vec<u32>,
+    /// Schema version that produced this entry. Anything below
+    /// `CACHE_VERSION` is treated by the worker as "needs re-analysis"
+    /// (e.g. legacy entries with no downbeats; once the user installs
+    /// the model the worker upgrades them on the next launch).
+    pub version: u32,
 }
 
 pub struct AnalysisCache {
@@ -99,6 +112,17 @@ impl AnalysisCache {
             .unwrap_or(false)
     }
 
+    /// True iff we have an entry for `path` *and* it was produced by
+    /// the current schema (or newer). Worker uses this to decide
+    /// whether to re-analyse a track that has a stale legacy entry.
+    pub fn is_current(&self, path: &Path) -> bool {
+        self.entries
+            .lock()
+            .ok()
+            .and_then(|m| m.get(path).map(|c| c.version >= CACHE_VERSION))
+            .unwrap_or(false)
+    }
+
     /// Insert + append to disk. Cheap: appends one line.
     pub fn insert(&self, path: PathBuf, analysis: CachedAnalysis) {
         if let Ok(mut m) = self.entries.lock() {
@@ -129,41 +153,92 @@ impl AnalysisCache {
             .map(|b| format!("{b:.4}"))
             .collect::<Vec<_>>()
             .join(",");
+        let downbeats: String = a
+            .downbeats
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        // Format: "v<version>|path|bpm|tonic|is_minor|beats|downbeats".
+        // The downbeats column is only meaningful at v2+; older
+        // versions write an empty string there.
         writeln!(
             f,
-            "{}|{:.3}|{}|{}|{}",
-            path_str, a.bpm, tonic, is_minor, beats
+            "v{}|{}|{:.3}|{}|{}|{}|{}",
+            a.version, path_str, a.bpm, tonic, is_minor, beats, downbeats
         )
     }
 }
 
 fn parse_line(line: &str) -> Option<(PathBuf, CachedAnalysis)> {
-    let mut parts = line.splitn(5, '|');
+    // Try v2 first, then v1, then the unprefixed legacy format. The
+    // worker upgrades anything below CACHE_VERSION on the next pass.
+    if let Some(rest) = line.strip_prefix("v2|") {
+        return parse_v2(rest);
+    }
+    if let Some(rest) = line.strip_prefix("v1|") {
+        return parse_v1(rest);
+    }
+    parse_v1(line)
+}
+
+fn parse_v2(rest: &str) -> Option<(PathBuf, CachedAnalysis)> {
+    let mut parts = rest.splitn(6, '|');
     let path = parts.next()?;
     let bpm = parts.next()?.parse::<f32>().ok()?;
     let tonic = parts.next()?.parse::<i32>().ok()?;
     let is_minor = parts.next()?.parse::<bool>().ok()?;
     let beats_str = parts.next()?;
-    let beats: Vec<f64> = if beats_str.is_empty() {
+    let downbeats_str = parts.next()?;
+    let beats = parse_f64_csv(beats_str);
+    let downbeats = parse_u32_csv(downbeats_str);
+    let key = make_key(tonic, is_minor);
+    Some((
+        PathBuf::from(path),
+        CachedAnalysis { bpm, key, beats, downbeats, version: 2 },
+    ))
+}
+
+fn parse_v1(rest: &str) -> Option<(PathBuf, CachedAnalysis)> {
+    let mut parts = rest.splitn(5, '|');
+    let path = parts.next()?;
+    let bpm = parts.next()?.parse::<f32>().ok()?;
+    let tonic = parts.next()?.parse::<i32>().ok()?;
+    let is_minor = parts.next()?.parse::<bool>().ok()?;
+    let beats_str = parts.next()?;
+    let beats = parse_f64_csv(beats_str);
+    let key = make_key(tonic, is_minor);
+    Some((
+        PathBuf::from(path),
+        CachedAnalysis { bpm, key, beats, downbeats: Vec::new(), version: 1 },
+    ))
+}
+
+fn parse_f64_csv(s: &str) -> Vec<f64> {
+    if s.is_empty() {
         Vec::new()
     } else {
-        beats_str
-            .split(',')
-            .filter_map(|s| s.parse::<f64>().ok())
-            .collect()
-    };
-    let key = if (0..12).contains(&tonic) {
+        s.split(',').filter_map(|x| x.parse().ok()).collect()
+    }
+}
+
+fn parse_u32_csv(s: &str) -> Vec<u32> {
+    if s.is_empty() {
+        Vec::new()
+    } else {
+        s.split(',').filter_map(|x| x.parse().ok()).collect()
+    }
+}
+
+fn make_key(tonic: i32, is_minor: bool) -> Option<MusicalKey> {
+    if (0..12).contains(&tonic) {
         Some(MusicalKey {
             tonic: tonic as u8,
             is_minor,
         })
     } else {
         None
-    };
-    Some((
-        PathBuf::from(path),
-        CachedAnalysis { bpm, key, beats },
-    ))
+    }
 }
 
 /// Camelot Wheel compatibility (harmonic mixing). Two keys are compatible iff:
