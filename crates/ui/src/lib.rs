@@ -1177,15 +1177,21 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
     let title = d.title.as_deref().unwrap_or("(no track)");
     ui.add(egui::Label::new(title).truncate());
 
-    // Stem-separation status. Visible only while a track is loaded
-    // and stems haven't arrived yet (the worker is still grinding
-    // in the background or the demucs subprocess errored).
-    if d.loaded_path.is_some() && !d.telemetry.are_stems_loaded() {
-        ui.colored_label(
-            Color32::from_rgb(200, 160, 70),
-            "🎛 separating stems…",
-        );
-    }
+    // Stem-separation status. Always allocate the row so the layout
+    // below doesn't shift when stems finish loading; the label is
+    // only visible while we're actually waiting on the worker.
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), 18.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            if d.loaded_path.is_some() && !d.telemetry.are_stems_loaded() {
+                ui.colored_label(
+                    Color32::from_rgb(200, 160, 70),
+                    "🎛 separating stems…",
+                );
+            }
+        },
+    );
 
     // Transport: Play / CUE / Q / 🔒 / Sync / 🎧.
     ui.horizontal(|ui| {
@@ -1241,23 +1247,45 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
 
     ui.add_space(6.0);
 
-    // Channel-strip layout — like a real DJ mixer. Pitch fader on the
-    // left, then the channel strip on the right: HIGH / MID / LOW
-    // knobs stacked above the VOL fader. The pitch fader is offset
-    // down by the knobs' total height so its top sits level with the
-    // vol fader's top — the eye can read them as a horizontal pair.
+    // Channel strip: four columns of equal height. PITCH and VOL are
+    // identically-shaped fader columns (3 invisible knob-sized slots
+    // at the top so their labels + faders align with the *bottom* of
+    // the EQ and STEM columns). VOL sits between the two knob
+    // columns, not under EQ — matches the layout the user described.
+    //
+    //   ┌─PITCH─┐ ┌──EQ──┐ ┌─VOL─┐ ┌─STEMS─┐
+    //   │ (pad) │ │ HIGH │ │(pad)│ │ DRUMS │
+    //   │ (pad) │ │ MID  │ │(pad)│ │ VOCALS│
+    //   │ (pad) │ │ LOW  │ │(pad)│ │ INSTR │
+    //   │ label │ │      │ │label│ │       │
+    //   │ fader │ │      │ │fader│ │       │
+    //   │ value │ │      │ │value│ │       │
+    //   └───────┘ └──────┘ └─────┘ └───────┘
+    //
+    // The pad is rendered as 3 invisible widgets the same shape as a
+    // knob, so the ui.vertical item_spacing falls in the same
+    // places as it does in the EQ/STEM columns — labels line up to
+    // the pixel.
     const KNOB_DIA: f32 = 50.0;
-    const KNOB_FOOTPRINT: f32 = KNOB_DIA + 8.0; // knob() pads ±4 px
+    const KNOB_FOOTPRINT: f32 = KNOB_DIA + 8.0;
+    const KNOB_WIDGET_H: f32 = 14.0 + KNOB_DIA + 14.0; // label + dial + value
     const FADER_H: f32 = 150.0;
-    // 3× knob row heights (14 label + 50 dia + 14 value = 78) + the
-    // 6 px spacer that follows the LOW knob.
-    const KNOB_STACK_H: f32 = 3.0 * 78.0 + 6.0;
+    let track_loaded = d.loaded_path.is_some();
+    let stems_ready = d.telemetry.are_stems_loaded();
+    // When no track is loaded, show the stem labels in their normal
+    // uppercase form so the resting state of both decks looks the
+    // same. Only switch to the "separating…" hint when we're
+    // actually waiting on the worker for THIS deck.
+    let show_separating = track_loaded && !stems_ready;
+    let (drums_lbl, vocals_lbl, instr_lbl) = if show_separating {
+        ("drums…", "vocals…", "instr…")
+    } else {
+        ("DRUMS", "VOCALS", "INSTR")
+    };
     ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 24.0;
-        // Left: PITCH. Pushed down to line up with VOL on the right.
-        ui.vertical(|ui| {
-            ui.add_space(KNOB_STACK_H);
-            ui.label("PITCH");
+        ui.spacing_mut().item_spacing.x = 18.0;
+        // PITCH column.
+        fader_column(ui, KNOB_FOOTPRINT, KNOB_WIDGET_H, FADER_H, "PITCH", |ui| {
             let mut speed = d.telemetry.current_speed();
             let r = ui.add_sized(
                 [KNOB_FOOTPRINT, FADER_H],
@@ -1271,9 +1299,7 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
             }
             ui.label(format!("{:.3}", speed));
         });
-        // Middle: EQ knob column — HIGH/MID/LOW stacked, VOL fader
-        // directly below. Same column width on every widget so their
-        // centres sit on one vertical axis.
+        // EQ column.
         ui.vertical(|ui| {
             let cur_high = d.telemetry.current_eq_high_db();
             if let Some(v) = knob(ui, "HIGH", cur_high, -25.0..=6.0, KNOB_DIA) {
@@ -1287,8 +1313,9 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
             if let Some(v) = knob(ui, "LOW", cur_low, -25.0..=6.0, KNOB_DIA) {
                 let _ = sender.send(DeckCommand::SetEqLow { deck, db: v });
             }
-            ui.add_space(6.0);
-            ui.label("VOL");
+        });
+        // VOL column — same shape as PITCH so the two faders line up.
+        fader_column(ui, KNOB_FOOTPRINT, KNOB_WIDGET_H, FADER_H, "VOL", |ui| {
             let mut gain = d.telemetry.current_gain();
             let r = ui.add_sized(
                 [KNOB_FOOTPRINT, FADER_H],
@@ -1302,16 +1329,8 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
             }
             ui.label(format!("{:.2}", gain));
         });
-        // Right: stem-control column — DRUMS / VOCALS / INSTR
-        // mirroring the EQ layout. Knobs sit lowercase + ellipsis
-        // until the async stem worker pushes buffers; dragging is
-        // allowed even when separation is in progress so the user
-        // can pre-set gains for an incoming mix.
-        let stems_ready = d.telemetry.are_stems_loaded();
+        // STEM column.
         ui.vertical(|ui| {
-            let drums_lbl = if stems_ready { "DRUMS" } else { "drums…" };
-            let vocals_lbl = if stems_ready { "VOCALS" } else { "vocals…" };
-            let instr_lbl = if stems_ready { "INSTR" } else { "instr…" };
             let cur_drums = d.telemetry.current_stem_drums();
             if let Some(v) = knob(ui, drums_lbl, cur_drums, 0.0..=1.5, KNOB_DIA) {
                 let _ = sender.send(DeckCommand::SetStemDrums { deck, gain: v });
@@ -1324,10 +1343,28 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
             if let Some(v) = knob(ui, instr_lbl, cur_instr, 0.0..=1.5, KNOB_DIA) {
                 let _ = sender.send(DeckCommand::SetStemInstruments { deck, gain: v });
             }
-            // Padding so this column's vertical extent matches the
-            // EQ column (VOL fader + value label below).
-            ui.add_space(6.0 + 16.0 + FADER_H + 16.0);
         });
+    });
+}
+
+/// Renders a vertical fader column with 3 invisible knob-shaped slots
+/// at the top so its fader + label + value end up at the same Y as
+/// the bottom of an adjacent 3-knob column. Keeps PITCH and VOL
+/// aligned regardless of egui's per-widget item_spacing.
+fn fader_column(
+    ui: &mut egui::Ui,
+    knob_w: f32,
+    knob_h: f32,
+    _fader_h: f32,
+    label: &str,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    ui.vertical(|ui| {
+        for _ in 0..3 {
+            ui.allocate_exact_size(Vec2::new(knob_w, knob_h), Sense::hover());
+        }
+        ui.label(label);
+        body(ui);
     });
 }
 
