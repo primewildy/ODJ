@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender as StdSender, channel};
-use std::time::Duration;
 
 use audio::{DeckTelemetry, Engine, Sender};
 use control::{DeckCommand, DeckId, MusicalKey, TrackAnalysis, TrackBuffer};

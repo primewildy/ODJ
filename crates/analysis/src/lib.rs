@@ -401,7 +401,7 @@ fn run_downbeat_window(
             nearest = i;
         }
     }
-    let mut mod_offset = nearest % 4;
+    let mod_offset = nearest % 4;
 
     // The model has a known failure mode on dance music where it
     // confidently picks the half-bar (kicks-on-2-and-4 misread as

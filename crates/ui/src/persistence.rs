@@ -105,13 +105,6 @@ impl AnalysisCache {
         self.entries.lock().ok()?.get(path).cloned()
     }
 
-    pub fn contains(&self, path: &Path) -> bool {
-        self.entries
-            .lock()
-            .map(|m| m.contains_key(path))
-            .unwrap_or(false)
-    }
-
     /// True iff we have an entry for `path` *and* it was produced by
     /// the current schema (or newer). Worker uses this to decide
     /// whether to re-analyse a track that has a stale legacy entry.

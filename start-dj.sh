@@ -53,7 +53,15 @@ elif [[ -z "$MONO_PB_ID" ]]; then
 fi
 
 # --- Step 2: launch dj ----------------------------------------------------
-cargo run --release -- \
+# Build first (blocking) so we don't start the 10 s stream-discovery poll
+# while cargo is still compiling. A cold build is ~30 s; the poll would
+# always time out before the binary even started.
+echo "[dj] building (this is fast if nothing changed)..."
+if ! cargo build --release --quiet; then
+    echo "[dj] build failed, bailing"
+    exit 1
+fi
+target/release/dj \
     --cue-device "KT USB Audio" \
     --midi "ODJ" \
     "$@" &
