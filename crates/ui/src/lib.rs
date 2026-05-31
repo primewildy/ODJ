@@ -817,21 +817,31 @@ impl eframe::App for DjApp {
             ui.separator();
 
             // Bottom: controls in mixer-style columns — Deck A on the
-            // left, Deck B on the right. Each column gets its own deck
-            // header + transport + pitch/vol + EQ.
+            // left, Deck B on the right. The midline is fixed at half
+            // the central panel width and the per-deck inner UI is
+            // strictly clipped to its half, so a long track title on
+            // Deck A can't push Deck B around.
             let col_w = (ui.available_width() - 12.0) * 0.5;
             let col_h = ui.available_height();
-            ui.horizontal(|ui| {
+            ui.horizontal_top(|ui| {
                 ui.allocate_ui_with_layout(
                     Vec2::new(col_w, col_h),
                     egui::Layout::top_down(egui::Align::LEFT),
-                    |ui| deck_controls(ui, DeckId::A, &mut self.deck_a, &self.sender),
+                    |ui| {
+                        ui.set_min_width(col_w);
+                        ui.set_max_width(col_w);
+                        deck_controls(ui, DeckId::A, &mut self.deck_a, &self.sender);
+                    },
                 );
                 ui.separator();
                 ui.allocate_ui_with_layout(
                     Vec2::new(col_w, col_h),
                     egui::Layout::top_down(egui::Align::LEFT),
-                    |ui| deck_controls(ui, DeckId::B, &mut self.deck_b, &self.sender),
+                    |ui| {
+                        ui.set_min_width(col_w);
+                        ui.set_max_width(col_w);
+                        deck_controls(ui, DeckId::B, &mut self.deck_b, &self.sender);
+                    },
                 );
             });
         });
@@ -948,8 +958,10 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
             }
             ui.label(format!("{:.3}", speed));
         });
-        // Right: EQ knobs stacked above VOL fader.
-        ui.vertical(|ui| {
+        // Right: EQ knobs stacked above VOL fader. vertical_centered
+        // aligns each child on a single vertical axis so the vol fader
+        // sits dead under the knobs' centre line.
+        ui.vertical_centered(|ui| {
             let cur_high = d.telemetry.current_eq_high_db();
             if let Some(v) = knob(ui, "HIGH", cur_high, -25.0..=6.0, 50.0) {
                 let _ = sender.send(DeckCommand::SetEqHigh { deck, db: v });
@@ -965,8 +977,11 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
             ui.add_space(6.0);
             ui.label("VOL");
             let mut gain = d.telemetry.current_gain();
+            // Match the knob's overall footprint (50 dia + 4 pad each
+            // side = 58 px) so the fader's bounding box centres on the
+            // same axis as the knobs above.
             let r = ui.add_sized(
-                [50.0, 130.0],
+                [58.0, 130.0],
                 egui::Slider::new(&mut gain, 0.0..=1.0)
                     .vertical()
                     .fixed_decimals(2)
