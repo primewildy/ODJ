@@ -304,6 +304,10 @@ struct AnalysisRefined {
 struct StemPeaks {
     deck: DeckId,
     path: PathBuf,
+    /// Stems audio. Routed through the UI's drain loop (gated on
+    /// `path` matching the deck's current track) so the engine never
+    /// gets stems for a track the user already moved on from.
+    stems: Arc<control::TrackStems>,
     overview_drums: Vec<f32>,
     overview_bass: Vec<f32>,
     overview_melody: Vec<f32>,
@@ -575,6 +579,7 @@ impl DjApp {
                             let stems_peaks = StemPeaks {
                                 deck,
                                 path: path_s.clone(),
+                                stems: Arc::clone(&stems),
                                 overview_drums: compute_overview_from(
                                     &stems.drums,
                                     ch,
@@ -606,8 +611,14 @@ impl DjApp {
                                     HIRES_SAMPLES_PER_PEAK,
                                 ),
                             };
-                            let _ =
-                                sender_s.send(DeckCommand::SetStems { deck, stems });
+                            // Don't push SetStems to the engine here —
+                            // drain_loads validates the path against
+                            // the deck's current track before
+                            // forwarding, closing the race where a
+                            // slow demucs job lands after the user
+                            // has moved on to another track.
+                            drop(stems);
+                            let _ = sender_s; // unused; kept for symmetry
                             let _ = tx_s.send(LoadEvent::Stems(stems_peaks));
                         }
                         Err(e) => eprintln!("stems: {} failed: {e:#}", path_s.display()),
@@ -936,6 +947,10 @@ impl DjApp {
                     d.stem_hires_drums = s.hires_drums;
                     d.stem_hires_bass = s.hires_bass;
                     d.stem_hires_melody = s.hires_melody;
+                    let _ = self.sender.send(DeckCommand::SetStems {
+                        deck: s.deck,
+                        stems: s.stems,
+                    });
                 }
             }
         }
