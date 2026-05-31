@@ -1141,7 +1141,7 @@ fn build_stream(
         scratch: Vec::with_capacity(4096),
         cue_scratch: Vec::with_capacity(4096),
         cue_producer,
-        cue_gain: 1.0,
+        cue_gain: 0.15,
         cue_mix: 1.0,
     };
     let err_fn = |e| eprintln!("audio: master stream error: {e}");

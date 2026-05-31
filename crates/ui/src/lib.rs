@@ -345,7 +345,7 @@ impl DjApp {
                 column: SortColumn::Title,
                 ascending: true,
             },
-            cue_gain: 1.0,
+            cue_gain: 0.15,
             cue_mix: 1.0,
         }
     }
@@ -528,6 +528,9 @@ impl DjApp {
         TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
+            // egui_extras caps the scroll area at ~800px by default — we
+            // want it to fill the side panel, so disable the cap.
+            .max_scroll_height(f32::INFINITY)
             .column(Column::auto())                                  // ★
             .column(Column::auto())                                  // A
             .column(Column::auto())                                  // B
@@ -810,6 +813,7 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
         ui.label(key_str);
     });
 
+    // Transport: Play / CUE / Q / 🔒 / Sync / 🎧.
     ui.horizontal(|ui| {
         let playing = d.telemetry.is_playing();
         let play_label = if playing { "⏸ Pause" } else { "▶ Play" };
@@ -853,65 +857,142 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
         if ui.toggle_value(&mut cue_on, "🎧 CUE").changed() {
             let _ = sender.send(DeckCommand::SetCueOn { deck, on: cue_on });
         }
-
-        ui.separator();
-        let mut speed = d.telemetry.current_speed();
-        let r = ui.add(
-            egui::Slider::new(&mut speed, PITCH_MIN..=PITCH_MAX)
-                .text("pitch")
-                .fixed_decimals(3),
-        );
-        if r.changed() {
-            let _ = sender.send(DeckCommand::SetSpeed { deck, ratio: speed });
-        }
-
-        let mut gain = d.telemetry.current_gain();
-        let r = ui.add(
-            egui::Slider::new(&mut gain, 0.0..=1.0)
-                .text("vol")
-                .fixed_decimals(2),
-        );
-        if r.changed() {
-            let _ = sender.send(DeckCommand::SetGain { deck, gain });
-        }
-
-        ui.separator();
-        ui.label(format!(
-            "{:>+5.2}% | {:.2}s",
-            (d.telemetry.current_speed() - 1.0) * 100.0,
-            d.playhead_secs(),
-        ));
     });
 
+    ui.label(format!(
+        "{:>+5.2}% | {:.2}s",
+        (d.telemetry.current_speed() - 1.0) * 100.0,
+        d.playhead_secs(),
+    ));
+
+    ui.add_space(6.0);
+
+    // EQ rotary knobs (Pioneer-style HIGH / MID / LOW). Drag vertically
+    // on a knob to change its value; double-click to reset to 0 dB.
     ui.horizontal(|ui| {
-        let mut low = d.telemetry.current_eq_low_db();
-        let r = ui.add(
-            egui::Slider::new(&mut low, -25.0..=6.0)
-                .text("low")
-                .fixed_decimals(1),
-        );
-        if r.changed() {
-            let _ = sender.send(DeckCommand::SetEqLow { deck, db: low });
+        ui.spacing_mut().item_spacing.x = 14.0;
+        let cur_high = d.telemetry.current_eq_high_db();
+        if let Some(v) = knob(ui, "HIGH", cur_high, -25.0..=6.0, 56.0) {
+            let _ = sender.send(DeckCommand::SetEqHigh { deck, db: v });
         }
-        let mut mid = d.telemetry.current_eq_mid_db();
-        let r = ui.add(
-            egui::Slider::new(&mut mid, -25.0..=6.0)
-                .text("mid")
-                .fixed_decimals(1),
-        );
-        if r.changed() {
-            let _ = sender.send(DeckCommand::SetEqMid { deck, db: mid });
+        let cur_mid = d.telemetry.current_eq_mid_db();
+        if let Some(v) = knob(ui, "MID", cur_mid, -25.0..=6.0, 56.0) {
+            let _ = sender.send(DeckCommand::SetEqMid { deck, db: v });
         }
-        let mut high = d.telemetry.current_eq_high_db();
-        let r = ui.add(
-            egui::Slider::new(&mut high, -25.0..=6.0)
-                .text("high")
-                .fixed_decimals(1),
-        );
-        if r.changed() {
-            let _ = sender.send(DeckCommand::SetEqHigh { deck, db: high });
+        let cur_low = d.telemetry.current_eq_low_db();
+        if let Some(v) = knob(ui, "LOW", cur_low, -25.0..=6.0, 56.0) {
+            let _ = sender.send(DeckCommand::SetEqLow { deck, db: v });
         }
     });
+
+    ui.add_space(10.0);
+
+    // Vertical PITCH and VOL faders, side by side.
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 20.0;
+        ui.vertical(|ui| {
+            ui.label("PITCH");
+            let mut speed = d.telemetry.current_speed();
+            let r = ui.add_sized(
+                [50.0, 170.0],
+                egui::Slider::new(&mut speed, PITCH_MIN..=PITCH_MAX)
+                    .vertical()
+                    .fixed_decimals(3)
+                    .show_value(false),
+            );
+            if r.changed() {
+                let _ = sender.send(DeckCommand::SetSpeed { deck, ratio: speed });
+            }
+            ui.label(format!("{:.3}", speed));
+        });
+        ui.vertical(|ui| {
+            ui.label("VOL");
+            let mut gain = d.telemetry.current_gain();
+            let r = ui.add_sized(
+                [50.0, 170.0],
+                egui::Slider::new(&mut gain, 0.0..=1.0)
+                    .vertical()
+                    .fixed_decimals(2)
+                    .show_value(false),
+            );
+            if r.changed() {
+                let _ = sender.send(DeckCommand::SetGain { deck, gain });
+            }
+            ui.label(format!("{:.2}", gain));
+        });
+    });
+}
+
+/// Rotary knob — circular dial with an indicator line at the current
+/// angle. Drag up to increase, down to decrease (150 px covers the full
+/// range). Double-click resets to 0 dB if the range straddles zero, else
+/// to the midpoint. Returns `Some(new)` when the value changed.
+fn knob(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: f32,
+    range: std::ops::RangeInclusive<f32>,
+    diameter: f32,
+) -> Option<f32> {
+    let label_h = 14.0;
+    let value_h = 14.0;
+    let pad_x = 4.0;
+    let total = Vec2::new(diameter + pad_x * 2.0, label_h + diameter + value_h);
+    let (rect, response) = ui.allocate_exact_size(total, Sense::click_and_drag());
+
+    let painter = ui.painter_at(rect);
+    let lo = *range.start();
+    let hi = *range.end();
+    let neutral = if lo < 0.0 && hi > 0.0 { 0.0 } else { (lo + hi) * 0.5 };
+
+    painter.text(
+        Pos2::new(rect.center().x, rect.top() + label_h * 0.5),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::default(),
+        Color32::LIGHT_GRAY,
+    );
+
+    let center = Pos2::new(rect.center().x, rect.top() + label_h + diameter * 0.5);
+    let radius = diameter * 0.5 - 1.0;
+    painter.circle_filled(center, radius, Color32::from_gray(28));
+    painter.circle_stroke(center, radius, Stroke::new(1.0, Color32::from_gray(90)));
+
+    // -135° (min) → +135° (max), measured clockwise from 12 o'clock.
+    let frac = ((value - lo) / (hi - lo)).clamp(0.0, 1.0);
+    let theta = (-135.0_f32 + frac * 270.0).to_radians();
+    let tip = center
+        + Vec2::new(theta.sin() * radius * 0.85, -theta.cos() * radius * 0.85);
+    let highlight = response.hovered() || response.dragged();
+    let line_color = if highlight {
+        Color32::from_rgb(180, 220, 255)
+    } else {
+        Color32::from_rgb(120, 200, 255)
+    };
+    painter.line_segment([center, tip], Stroke::new(2.5, line_color));
+
+    painter.text(
+        Pos2::new(rect.center().x, rect.bottom() - value_h * 0.5),
+        egui::Align2::CENTER_CENTER,
+        format!("{:.1}", value),
+        egui::FontId::default(),
+        Color32::WHITE,
+    );
+
+    let mut new = None;
+    if response.dragged() {
+        let dy = -response.drag_delta().y;
+        if dy != 0.0 {
+            let v = (value + (dy / 150.0) * (hi - lo)).clamp(lo, hi);
+            if (v - value).abs() > f32::EPSILON {
+                new = Some(v);
+            }
+        }
+    }
+    if response.double_clicked() && (value - neutral).abs() > f32::EPSILON {
+        new = Some(neutral);
+    }
+    new
 }
 
 fn overview_waveform(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
