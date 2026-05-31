@@ -106,8 +106,25 @@ fn main() -> Result<()> {
             .with_inner_size([1100.0, 720.0]),
         ..Default::default()
     };
-    eframe::run_native("DJ", options, Box::new(|_cc| Ok(Box::new(app))))
-        .map_err(|e| anyhow!("eframe: {e}"))?;
+    eframe::run_native(
+        "DJ",
+        options,
+        Box::new(move |cc| {
+            // Wayland heartbeat: when the window loses focus the
+            // compositor's xdg ping can time out before our next
+            // repaint lands, which makes Hyprland pop the
+            // "force kill / wait?" dialog. A 1 s wake-up guarantees
+            // the winit event loop pumps often enough to keep the
+            // protocol happy.
+            let ctx = cc.egui_ctx.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                ctx.request_repaint();
+            });
+            Ok(Box::new(app))
+        }),
+    )
+    .map_err(|e| anyhow!("eframe: {e}"))?;
 
     Ok(())
 }
