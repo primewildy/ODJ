@@ -38,6 +38,12 @@ fn dump_touch_dial() {
 
 #[test]
 #[ignore = "diagnostic only — run with --ignored"]
+fn dump_space_arp() {
+    dump_one("/home/ben/Documents/DJ/music/Adamo (Italy) - Space Arp (Extended Mix).mp3");
+}
+
+#[test]
+#[ignore = "diagnostic only — run with --ignored"]
 fn dump_emotion() {
     dump_one("/home/ben/Documents/DJ/music/112. Toman - Emotion (Extended Mix).mp3");
     dump_one("/home/ben/Documents/DJ/music/Eli Fola - Emotion (Extended Mix).mp3");

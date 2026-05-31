@@ -31,10 +31,13 @@ use cpal::{BufferSize, SampleFormat, Stream, StreamConfig};
 const RING_CAPACITY: usize = 256;
 // 128 frames (2.9 ms @ 44.1 k) is the latency sweet-spot but it's tight
 // when running two ALSA streams (master + cue) under PipeWire — one can
-// starve the other and trigger snd_pcm_recover underruns. 256 frames
-// (5.8 ms) gives the scheduler enough headroom while staying well under
-// the ~10 ms threshold where DJ feel starts to suffer.
-const TARGET_BUFFER_FRAMES: u32 = 256;
+// starve the other and trigger snd_pcm_recover underruns. 512 frames
+// (11.6 ms) gives the scheduler enough headroom for the GPU analysis
+// worker to share CPU without underrunning the audio callback, while
+// staying well under the ~25 ms threshold where DJ feel starts to
+// suffer. Was 256 (5.8 ms) — too tight when ort+CUDA inference is
+// active in the background.
+const TARGET_BUFFER_FRAMES: u32 = 512;
 /// Cue audio ring (master callback writes, cue callback reads).
 /// Stereo f32 — sized for ~23 ms of audio at 44.1k (4096 / 2 / 44100).
 const CUE_RING_CAPACITY: usize = 4096;

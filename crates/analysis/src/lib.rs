@@ -416,26 +416,17 @@ fn run_downbeat_window(
     // picked a non-zero offset, snap back to offset 0. Moonlight's
     // anacrustic intro has a quiet beat[0] (env is mid-pack) so the
     // override doesn't fire there.
-    // Phrase-boundary cross-check: in dance music every break is
-    // followed by the beat re-entering on a "1". The DSP envelope
-    // shows breaks as a clear quiet patch; finding the re-entry +
-    // mapping it back to a DSP beat index gives us a strong vote
-    // for the bar phase, independent of the model. When multiple
-    // re-entries agree, this beats both the model and the beat[0]
-    // heuristic — the consensus is hard to game.
-    let phrase_offset = phrase_boundary_offset(beats, env, env_fps);
-
+    // Phrase-boundary cross-check intentionally disabled: my
+    // re-entry detector finds the *climb-back* of the smoothed
+    // envelope, which lands one beat after the actual downbeat,
+    // so the vote consistently points to off=N+1 instead of N.
+    // Net record so far: 0 true positives, 1 false positive
+    // (Space Arp; model picked 0, vote said 1). Until the
+    // re-entry frame is found more precisely (low-band onset
+    // peak, not envelope ramp), trust the model + beat[0] override.
     let beat0_strong = first_beat_is_strong_onset(beats, env, env_fps);
 
-    let final_offset = if let Some(p) = phrase_offset {
-        if p != mod_offset {
-            eprintln!(
-                "analysis: phrase-boundary vote wins ({} -> {}); model wanted {}",
-                mod_offset, p, mod_offset
-            );
-        }
-        p
-    } else if mod_offset != 0 && beat0_strong {
+    let final_offset = if mod_offset != 0 && beat0_strong {
         eprintln!(
             "analysis: half-bar override (beat[0] is a strong kick); model wanted offset {}",
             mod_offset
@@ -456,6 +447,11 @@ fn run_downbeat_window(
 /// least two break-and-re-entry pairs in the track AND ≥75 % of them
 /// agree on the same DSP-grid `% 4`. Returns `None` when the signal
 /// isn't strong enough (no clear breaks, or re-entries disagree).
+///
+/// Currently unused — kept for the future, see the
+/// "phrase-boundary cross-check intentionally disabled" comment in
+/// `run_downbeat_window` for the reason.
+#[allow(dead_code)]
 ///
 /// The premise: in dance music every breakdown ends on a "1". A
 /// breakdown shows up in the spectral-flux envelope as a sustained

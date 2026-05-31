@@ -37,6 +37,15 @@ fn spawn_analysis_worker(
         return;
     }
     std::thread::spawn(move || {
+        // Nice ourselves down. ort+CUDA inference + symphonia decode
+        // are both CPU-hungry on top of GPU work; without this they
+        // happily compete with the audio callback thread and trigger
+        // snd_pcm_recover underruns. +10 is enough headroom on a
+        // multi-core laptop without making the library scan feel
+        // glacial.
+        unsafe {
+            libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+        }
         for path in tracks {
             if cache.is_current(&path) {
                 continue;
@@ -45,6 +54,11 @@ fn spawn_analysis_worker(
                 progress.fetch_add(1, Ordering::Relaxed);
                 continue;
             };
+            let display_name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("?");
+            eprintln!("analysing: {display_name}");
             let r = analysis::analyse(&buffer);
             cache.insert(
                 path.clone(),
@@ -484,6 +498,11 @@ impl DjApp {
                 let sender_slow = sender.clone();
                 let tx_slow = tx.clone();
                 std::thread::spawn(move || {
+                    // Same priority drop as the background scan
+                    // worker — don't fight the audio callback.
+                    unsafe {
+                        libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+                    }
                     let r = analysis::analyse(&buffer);
                     let entry = CachedAnalysis {
                         bpm: r.bpm,
