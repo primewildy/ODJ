@@ -27,3 +27,4 @@ you want the rationale behind a specific decision.
 - [pipewire_routing.md](pipewire_routing.md) — cue stream routing on PipeWire, gotchas + `start-dj.sh`
 - [stem_separation.md](stem_separation.md) — model spike + decision: HTDemucs 4-stem, exposed as 3 controls per deck
 - [downbeat_detection.md](downbeat_detection.md) — model spike + decision: beat_this exported to ONNX, custom global-bar-phase postproc
+- [htdemucs_onnx_export.md](htdemucs_onnx_export.md) — failed attempt to drop the Python demucs subprocess; sticks with Python until Mixxx GSoC 2025 ships their ONNX export
