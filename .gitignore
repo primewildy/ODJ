@@ -42,3 +42,23 @@ controls.toml
 
 # Rust
 Cargo.lock.bak
+stem-spike/
+
+# Audio files — never commit (copyright). The music/ library is gitignored
+# above; this catches strays anywhere in the tree (downloaded samples,
+# stems caches, recorded mixes, etc.). Add audio source/test fixtures via
+# `git add -f` if you ever genuinely need one.
+*.mp3
+*.wav
+*.flac
+*.opus
+*.m4a
+*.ogg
+*.aac
+*.aiff
+*.aif
+*.wma
+*.webm
+*.au
+*.amr
+*.ape
