@@ -44,6 +44,12 @@ fn dump_space_arp() {
 
 #[test]
 #[ignore = "diagnostic only — run with --ignored"]
+fn dump_way_i_like_it() {
+    dump_one("/home/ben/Documents/DJ/music/Discip - The Way I Like It (Original Mix).mp3");
+}
+
+#[test]
+#[ignore = "diagnostic only — run with --ignored"]
 fn dump_emotion() {
     dump_one("/home/ben/Documents/DJ/music/112. Toman - Emotion (Extended Mix).mp3");
     dump_one("/home/ben/Documents/DJ/music/Eli Fola - Emotion (Extended Mix).mp3");

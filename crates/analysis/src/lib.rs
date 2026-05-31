@@ -348,8 +348,8 @@ fn run_downbeat_window(
     if n_silent > 0 {
         let mod_offset = n_silent % 4;
         eprintln!(
-            "analysis: trimming {} silent leading beats, mod_offset = {}",
-            n_silent, mod_offset
+            "analysis: trimming {} silent leading beats (env at beat[0..{}] near zero), mod_offset = {}",
+            n_silent, n_silent, mod_offset
         );
         return Ok((0..beats.len())
             .filter(|i| i % 4 == mod_offset)
