@@ -61,7 +61,12 @@ if ! cargo build --release --quiet; then
     echo "[dj] build failed, bailing"
     exit 1
 fi
-target/release/dj \
+# `copy-dylibs` puts libonnxruntime.so + the CUDA EP libs in
+# target/release/. When cargo runs the binary, it sets the loader
+# path automatically; when we exec it directly we have to set it
+# ourselves. Use the absolute path so the script works from any cwd.
+RELEASE_DIR="$(pwd)/target/release"
+LD_LIBRARY_PATH="${RELEASE_DIR}:${LD_LIBRARY_PATH:-}" "${RELEASE_DIR}/dj" \
     --cue-device "KT USB Audio" \
     --midi "ODJ" \
     "$@" &
