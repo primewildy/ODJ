@@ -782,7 +782,11 @@ impl eframe::App for DjApp {
         self.drain_loads();
         handle_keys(ctx, &self.sender);
 
-        ctx.request_repaint_after(Duration::from_millis(16));
+        // Force continuous repaint — the deck waveforms and the
+        // running playhead need ~60 Hz anyway, and keeping the event
+        // loop hot prevents Hyprland's "Application Not Responding"
+        // dialog from popping when the surface goes idle.
+        ctx.request_repaint();
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {

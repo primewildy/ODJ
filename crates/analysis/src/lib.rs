@@ -395,24 +395,127 @@ fn run_downbeat_window(
     // picked a non-zero offset, snap back to offset 0. Moonlight's
     // anacrustic intro has a quiet beat[0] (env is mid-pack) so the
     // override doesn't fire there.
-    let overridden = if mod_offset != 0 && first_beat_is_strong_onset(beats, env, env_fps) {
-        mod_offset = 0;
-        true
-    } else {
-        false
-    };
+    // Phrase-boundary cross-check: in dance music every break is
+    // followed by the beat re-entering on a "1". The DSP envelope
+    // shows breaks as a clear quiet patch; finding the re-entry +
+    // mapping it back to a DSP beat index gives us a strong vote
+    // for the bar phase, independent of the model. When multiple
+    // re-entries agree, this beats both the model and the beat[0]
+    // heuristic — the consensus is hard to game.
+    let phrase_offset = phrase_boundary_offset(beats, env, env_fps);
 
-    if overridden {
+    let beat0_strong = first_beat_is_strong_onset(beats, env, env_fps);
+
+    let final_offset = if let Some(p) = phrase_offset {
+        if p != mod_offset {
+            eprintln!(
+                "analysis: phrase-boundary vote wins ({} -> {}); model wanted {}",
+                mod_offset, p, mod_offset
+            );
+        }
+        p
+    } else if mod_offset != 0 && beat0_strong {
         eprintln!(
             "analysis: half-bar override (beat[0] is a strong kick); model wanted offset {}",
-            (nearest % 4)
+            mod_offset
         );
-    }
+        0
+    } else {
+        mod_offset
+    };
+    let mod_offset = final_offset;
 
     Ok((0..beats.len())
         .filter(|i| i % 4 == mod_offset)
         .map(|i| i as u32)
         .collect())
+}
+
+/// Returns `Some(off)` (0..4) when phrase-boundary detection finds at
+/// least two break-and-re-entry pairs in the track AND ≥75 % of them
+/// agree on the same DSP-grid `% 4`. Returns `None` when the signal
+/// isn't strong enough (no clear breaks, or re-entries disagree).
+///
+/// The premise: in dance music every breakdown ends on a "1". A
+/// breakdown shows up in the spectral-flux envelope as a sustained
+/// quiet patch (kicks gone). The frame where the envelope shoots
+/// back up is the re-entry. The DSP beat closest to that frame is
+/// therefore a bar-position-1 downbeat; its index modulo 4 is the
+/// global bar phase.
+fn phrase_boundary_offset(beats: &[f64], env: &[f32], env_fps: f32) -> Option<usize> {
+    if beats.is_empty() || env.is_empty() {
+        return None;
+    }
+    // Smooth the env over ~1 bar (2 s at 120 BPM) to suppress
+    // intra-bar variation; we want section-level activity, not
+    // beat-level activity.
+    let smooth_half = (env_fps * 1.0) as usize;
+    let smoothed: Vec<f32> = (0..env.len())
+        .map(|i| {
+            let s = i.saturating_sub(smooth_half);
+            let e = (i + smooth_half + 1).min(env.len());
+            env[s..e].iter().sum::<f32>() / (e - s) as f32
+        })
+        .collect();
+
+    // Reference level from the active sections: take the mean of the
+    // top 50 % of smoothed values so quiet breaks don't pull it down.
+    let mut sorted = smoothed.clone();
+    sorted.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let active_n = (sorted.len() / 2).max(1);
+    let active_mean = sorted[..active_n].iter().sum::<f32>() / active_n as f32;
+    if active_mean <= 1e-6 {
+        return None;
+    }
+
+    // Break = ≥2 s under 25 % of active level. Re-entry = the first
+    // frame after a break that climbs back above 60 % of active.
+    let break_thresh = 0.25 * active_mean;
+    let entry_thresh = 0.6 * active_mean;
+    let min_break_frames = (env_fps * 2.0) as usize;
+
+    let mut re_entry_times: Vec<f64> = Vec::new();
+    let mut in_break = false;
+    let mut break_start = 0usize;
+    for i in 0..smoothed.len() {
+        if !in_break {
+            if smoothed[i] < break_thresh {
+                in_break = true;
+                break_start = i;
+            }
+        } else if smoothed[i] > entry_thresh {
+            if i - break_start >= min_break_frames {
+                re_entry_times.push(i as f64 / env_fps as f64);
+            }
+            in_break = false;
+        }
+    }
+    if re_entry_times.len() < 2 {
+        return None;
+    }
+
+    // Vote on `% 4` of the nearest DSP beat for each re-entry.
+    let mut votes = [0u32; 4];
+    for &t in &re_entry_times {
+        let mut nearest = 0usize;
+        let mut best = f64::INFINITY;
+        for (i, &b) in beats.iter().enumerate() {
+            let d = (b - t).abs();
+            if d < best {
+                best = d;
+                nearest = i;
+            }
+        }
+        votes[nearest % 4] += 1;
+    }
+    let total: u32 = votes.iter().sum();
+    let (winner, &winning_count) = votes.iter().enumerate().max_by_key(|&(_, &v)| v).unwrap();
+    let ratio = winning_count as f32 / total as f32;
+    if ratio >= 0.75 {
+        Some(winner)
+    } else {
+        None
+    }
 }
 
 /// True iff `beats[0]`'s position in the spectral-flux envelope is in

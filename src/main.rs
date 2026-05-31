@@ -118,7 +118,11 @@ fn main() -> Result<()> {
             // protocol happy.
             let ctx = cc.egui_ctx.clone();
             std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                // 10 Hz — Hyprland's xdg ping has a ~5 s timeout, but
+                // some surfaces seem to drop wake-ups, so we pad
+                // heavily. Cost is negligible (a single atomic flip
+                // plus a wl_display roundtrip).
+                std::thread::sleep(std::time::Duration::from_millis(100));
                 ctx.request_repaint();
             });
             Ok(Box::new(app))
