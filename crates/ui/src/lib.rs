@@ -91,12 +91,20 @@ pub fn scan_music_dir(dir: &Path) -> Vec<TrackMeta> {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or(&filename);
-            let (artist, title) = parse_track_name(stem);
+            let (parsed_artist, parsed_title) = parse_track_name(stem);
+            // Prefer the file's embedded tags (more accurate than the
+            // filename heuristic); fall back to the filename parse when a
+            // tag is missing.
+            let tags = decode::read_tags(&p).unwrap_or_default();
+            let title = tags.title.unwrap_or(parsed_title);
+            let artist = tags.artist.unwrap_or(parsed_artist);
+            let genre = tags.genre.unwrap_or_default();
             out.push(TrackMeta {
                 path: p,
                 filename,
                 title,
                 artist,
+                genre,
             });
         }
     }
@@ -109,10 +117,13 @@ pub struct TrackMeta {
     pub path: PathBuf,
     /// Full filename (for substring filter).
     pub filename: String,
-    /// Parsed display title (best-effort).
+    /// Display title — prefers the file's embedded tag, falls back to a
+    /// best-effort filename parse.
     pub title: String,
-    /// Parsed artist (empty if not present in the filename).
+    /// Artist — same source preference as `title`.
     pub artist: String,
+    /// Genre tag (empty when the file doesn't carry one).
+    pub genre: String,
 }
 
 /// Best-effort split of a filename stem into (artist, title).
@@ -154,6 +165,7 @@ fn strip_leading_track_number(s: &str) -> &str {
 enum SortColumn {
     Title,
     Artist,
+    Genre,
     Key,
     Bpm,
 }
@@ -284,6 +296,9 @@ pub struct DjApp {
     music_dir: PathBuf,
     tracks: Vec<TrackMeta>,
     filter: String,
+    /// Selected genre filter. `None` = no filter; `Some("Techno")` = only
+    /// tracks whose genre tag exactly equals "Techno".
+    genre_filter: Option<String>,
     deck_a: DeckUi,
     deck_b: DeckUi,
     load_rx: Receiver<LoadResult>,
@@ -330,6 +345,7 @@ impl DjApp {
             music_dir,
             tracks,
             filter: String::new(),
+            genre_filter: None,
             deck_a,
             deck_b,
             load_rx,
@@ -433,6 +449,7 @@ impl DjApp {
         let filtered_sorted: Vec<usize> = {
             let filter_lower = self.filter.to_lowercase();
             let favs_only = self.favourites_only;
+            let genre_filter = self.genre_filter.as_deref();
             let target_key = match self.harmonic_filter {
                 Some(DeckId::A) => self.deck_a.key,
                 Some(DeckId::B) => self.deck_b.key,
@@ -456,6 +473,11 @@ impl DjApp {
                     }
                     if favs_only && !self.favourites.contains(&m.path) {
                         return false;
+                    }
+                    if let Some(g) = genre_filter {
+                        if !m.genre.eq_ignore_ascii_case(g) {
+                            return false;
+                        }
                     }
                     if harmonic_active {
                         let t = target_key.unwrap();
@@ -484,6 +506,9 @@ impl DjApp {
                     }
                     SortColumn::Artist => {
                         ma.artist.to_lowercase().cmp(&mb.artist.to_lowercase())
+                    }
+                    SortColumn::Genre => {
+                        ma.genre.to_lowercase().cmp(&mb.genre.to_lowercase())
                     }
                     SortColumn::Key => {
                         let ka = self.analysis_cache.get(&ma.path).and_then(|c| c.key);
@@ -536,6 +561,7 @@ impl DjApp {
             .column(Column::auto())                                  // B
             .column(Column::initial(220.0).resizable(true))          // title
             .column(Column::initial(140.0).resizable(true))          // artist
+            .column(Column::initial(100.0).resizable(true))          // genre
             .column(Column::auto())                                  // key
             .column(Column::auto())                                  // bpm
             .header(22.0, |mut header| {
@@ -550,6 +576,11 @@ impl DjApp {
                 header.col(|ui| {
                     if sort_header(ui, "Artist", sort, SortColumn::Artist) {
                         new_sort = Some(SortColumn::Artist);
+                    }
+                });
+                header.col(|ui| {
+                    if sort_header(ui, "Genre", sort, SortColumn::Genre) {
+                        new_sort = Some(SortColumn::Genre);
                     }
                 });
                 header.col(|ui| {
@@ -594,6 +625,9 @@ impl DjApp {
                     });
                     row.col(|ui| {
                         ui.label(&meta.artist);
+                    });
+                    row.col(|ui| {
+                        ui.label(&meta.genre);
                     });
                     row.col(|ui| {
                         ui.label(match key {
@@ -732,6 +766,33 @@ impl eframe::App for DjApp {
                                 Some(DeckId::B),
                                 "Deck B",
                             );
+                        });
+                    ui.separator();
+                    // Build the genre dropdown from the unique tags actually
+                    // present in the library — no point offering filters
+                    // the user can never match.
+                    let mut genres: Vec<&str> = self
+                        .tracks
+                        .iter()
+                        .map(|m| m.genre.trim())
+                        .filter(|g| !g.is_empty())
+                        .collect();
+                    genres.sort_unstable_by_key(|g| g.to_lowercase());
+                    genres.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+                    let genre_label = match &self.genre_filter {
+                        None => "Genre: any".to_string(),
+                        Some(g) => format!("Genre: {g}"),
+                    };
+                    egui::ComboBox::from_id_source("genre")
+                        .selected_text(genre_label)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.genre_filter, None, "any");
+                            for g in genres {
+                                let sel = self.genre_filter.as_deref() == Some(g);
+                                if ui.selectable_label(sel, g).clicked() {
+                                    self.genre_filter = Some(g.to_string());
+                                }
+                            }
                         });
                 });
                 ui.separator();

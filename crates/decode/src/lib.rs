@@ -11,8 +11,72 @@ use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
+use symphonia::core::meta::{MetadataOptions, StandardTagKey, Value};
 use symphonia::core::probe::Hint;
+
+/// Tags extracted from a file's metadata header (ID3v2, Vorbis comments,
+/// mp4 atoms…). Each field is `None` when the file doesn't carry that tag.
+#[derive(Debug, Default, Clone)]
+pub struct TrackTags {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub genre: Option<String>,
+}
+
+/// Read the audio file's metadata header without decoding samples. Fast —
+/// just probes the format and walks the tag table. Used by the track
+/// scanner to populate the picker's columns + filters.
+pub fn read_tags(path: impl AsRef<Path>) -> Result<TrackTags> {
+    let path = path.as_ref();
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    let mut probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .context("symphonia probe failed")?;
+
+    let mut tags = TrackTags::default();
+    // Some formats carry metadata in the probe's outer container (e.g. ID3v2
+    // sitting in front of an MP3); others carry it on the format itself
+    // (e.g. FLAC Vorbis comments, mp4 atoms). Walk both.
+    if let Some(meta) = probed.metadata.get().as_ref().and_then(|m| m.current()) {
+        absorb_tags(&mut tags, meta.tags());
+    }
+    if let Some(meta) = probed.format.metadata().current() {
+        absorb_tags(&mut tags, meta.tags());
+    }
+    Ok(tags)
+}
+
+fn absorb_tags(out: &mut TrackTags, tags: &[symphonia::core::meta::Tag]) {
+    for t in tags {
+        let Some(std_key) = t.std_key else { continue };
+        let slot = match std_key {
+            StandardTagKey::TrackTitle if out.title.is_none() => &mut out.title,
+            StandardTagKey::Artist if out.artist.is_none() => &mut out.artist,
+            StandardTagKey::Album if out.album.is_none() => &mut out.album,
+            StandardTagKey::Genre if out.genre.is_none() => &mut out.genre,
+            _ => continue,
+        };
+        if let Value::String(s) = &t.value {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                *slot = Some(trimmed.to_string());
+            }
+        }
+    }
+}
 
 /// Fully decode the given audio file into a `TrackBuffer` (interleaved f32).
 pub fn load_to_buffer(path: impl AsRef<Path>) -> Result<Arc<TrackBuffer>> {
