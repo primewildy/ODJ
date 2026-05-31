@@ -380,12 +380,68 @@ fn run_downbeat_window(
             nearest = i;
         }
     }
-    let mod_offset = nearest % 4;
+    let mut mod_offset = nearest % 4;
+
+    // The model has a known failure mode on dance music where it
+    // confidently picks the half-bar (kicks-on-2-and-4 misread as
+    // kicks-on-1-and-3), giving an off-by-two result. For tracks where
+    // the FIRST beat of the grid is a strong onset — i.e. beat[0]
+    // sits on a kick, not a pickup hit — DJs almost always treat
+    // beat[0] as bar position 1. Override the model in exactly that
+    // case.
+    //
+    // The check: if beat[0]'s spectral-flux envelope value is among
+    // the top 30 % of envelope values in the track, AND the model
+    // picked a non-zero offset, snap back to offset 0. Moonlight's
+    // anacrustic intro has a quiet beat[0] (env is mid-pack) so the
+    // override doesn't fire there.
+    let overridden = if mod_offset != 0 && first_beat_is_strong_onset(beats, env, env_fps) {
+        mod_offset = 0;
+        true
+    } else {
+        false
+    };
+
+    if overridden {
+        eprintln!(
+            "analysis: half-bar override (beat[0] is a strong kick); model wanted offset {}",
+            (nearest % 4)
+        );
+    }
 
     Ok((0..beats.len())
         .filter(|i| i % 4 == mod_offset)
         .map(|i| i as u32)
         .collect())
+}
+
+/// True iff `beats[0]`'s position in the spectral-flux envelope is in
+/// the top 30 % of the track's envelope values — i.e. there's a
+/// strong onset at the very first detected beat. Used to spot dance
+/// tracks where beat[0] is the real bar-position-1 kick (the
+/// overwhelming majority) versus anacrustic intros where beat[0] is
+/// a quiet pickup hit (Moonlight et al.). Cheap: one O(n log n) sort
+/// per call, but this runs once per track.
+fn first_beat_is_strong_onset(beats: &[f64], env: &[f32], env_fps: f32) -> bool {
+    let Some(&beat0) = beats.first() else {
+        return false;
+    };
+    let env_idx = (beat0 as f32 * env_fps).round() as usize;
+    // Take the max env value across the ~1-beat window centred on
+    // beat[0]'s time. The DSP beat positions are sub-frame accurate
+    // so the strongest onset may not sit on the nearest env frame.
+    let radius = (env_fps * 0.15) as usize; // ±150 ms
+    let lo = env_idx.saturating_sub(radius);
+    let hi = (env_idx + radius + 1).min(env.len());
+    let beat0_onset = env[lo..hi]
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
+
+    let mut sorted: Vec<f32> = env.iter().copied().collect();
+    sorted.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let top_third = sorted[sorted.len() / 3];
+    beat0_onset >= top_third
 }
 
 /// Sliding-window scan over the spectral-flux envelope. Returns the

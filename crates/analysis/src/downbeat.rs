@@ -160,15 +160,47 @@ pub fn infer_window_bar_phase(logmel_chunk: &[f32]) -> Result<WindowBarPhase> {
             first_downbeat_secs: None,
             bar_offset: 0,
             local_beat_count: beat_frames.len(),
+            scores: [f32::NEG_INFINITY; 4],
         });
     }
-    let bar_off = global_bar_offset(&beat_frames, &downbeat_logits);
+    let (bar_off, scores) = global_bar_offset_with_scores(&beat_frames, &downbeat_logits);
     let first_db_frame = beat_frames[bar_off];
     Ok(WindowBarPhase {
         first_downbeat_secs: Some(first_db_frame as f64 / MODEL_FPS as f64),
         bar_offset: bar_off,
         local_beat_count: beat_frames.len(),
+        scores,
     })
+}
+
+/// Variant of `global_bar_offset` that also returns the 4 raw scores
+/// (one per candidate bar offset) for diagnostics + multi-window voting.
+fn global_bar_offset_with_scores(
+    beat_frames: &[usize],
+    downbeat_logits: &[f32],
+) -> (usize, [f32; 4]) {
+    let mut scores = [f32::NEG_INFINITY; 4];
+    if beat_frames.len() < 4 {
+        return (0, scores);
+    }
+    for off in 0..4 {
+        let mut sum = 0.0f32;
+        let mut i = off;
+        while i < beat_frames.len() {
+            sum += downbeat_logits[beat_frames[i]];
+            i += 4;
+        }
+        scores[off] = sum;
+    }
+    let mut best_off = 0usize;
+    let mut best = f32::NEG_INFINITY;
+    for (i, &s) in scores.iter().enumerate() {
+        if s > best {
+            best = s;
+            best_off = i;
+        }
+    }
+    (best_off, scores)
 }
 
 #[derive(Debug, Clone)]
@@ -183,6 +215,9 @@ pub struct WindowBarPhase {
     /// Number of beats peak-picked inside the window. Useful for
     /// scoring whether the chosen window was actually beat-heavy.
     pub local_beat_count: usize,
+    /// Raw 4-way downbeat-logit sums (one per candidate bar offset).
+    /// Useful for diagnostics + future multi-window voting.
+    pub scores: [f32; 4],
 }
 
 /// Run the model over a track that may be longer (or shorter) than a
