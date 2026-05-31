@@ -24,6 +24,12 @@ const PITCH_MIN: f32 = 0.92;
 const PITCH_MAX: f32 = 1.08;
 const ZOOM_BEATS: f64 = 16.0;
 const ZOOM_PLAYHEAD_FRAC: f32 = 0.33;
+// 3-stem overlay colours. Alpha ~50 % so overlapping columns blend
+// rather than mask each other. Drums = warm red (impact / energy),
+// bass = blue (low end), melody = yellow-green (vocals + harmonic).
+const STEM_COLOR_DRUMS: egui::Color32 = egui::Color32::from_rgba_premultiplied(110, 40, 30, 130);
+const STEM_COLOR_BASS: egui::Color32 = egui::Color32::from_rgba_premultiplied(40, 70, 110, 130);
+const STEM_COLOR_MELODY: egui::Color32 = egui::Color32::from_rgba_premultiplied(90, 110, 40, 130);
 
 /// Background worker that fills the analysis cache by decoding +
 /// analysing each track that's not already in the cache. Spawned once at
@@ -192,8 +198,12 @@ struct SortState {
 }
 
 fn compute_overview(buf: &TrackBuffer, num_buckets: usize) -> Vec<f32> {
-    let total = buf.frames();
-    let ch = buf.channels.max(1) as usize;
+    compute_overview_from(&buf.samples, buf.channels, num_buckets)
+}
+
+fn compute_overview_from(samples: &[f32], channels: u16, num_buckets: usize) -> Vec<f32> {
+    let ch = channels.max(1) as usize;
+    let total = samples.len() / ch;
     if total == 0 {
         return vec![0.0; num_buckets];
     }
@@ -209,7 +219,7 @@ fn compute_overview(buf: &TrackBuffer, num_buckets: usize) -> Vec<f32> {
             for f in start..end {
                 let i0 = f * ch;
                 for c in 0..ch {
-                    let v = buf.samples[i0 + c].abs();
+                    let v = samples[i0 + c].abs();
                     if v > peak {
                         peak = v;
                     }
@@ -221,8 +231,12 @@ fn compute_overview(buf: &TrackBuffer, num_buckets: usize) -> Vec<f32> {
 }
 
 fn compute_hires_peaks(buf: &TrackBuffer, samples_per_peak: usize) -> Vec<f32> {
-    let total = buf.frames();
-    let ch = buf.channels.max(1) as usize;
+    compute_hires_peaks_from(&buf.samples, buf.channels, samples_per_peak)
+}
+
+fn compute_hires_peaks_from(samples: &[f32], channels: u16, samples_per_peak: usize) -> Vec<f32> {
+    let ch = channels.max(1) as usize;
+    let total = samples.len() / ch;
     if total == 0 || samples_per_peak == 0 {
         return Vec::new();
     }
@@ -235,7 +249,7 @@ fn compute_hires_peaks(buf: &TrackBuffer, samples_per_peak: usize) -> Vec<f32> {
         for f in start..end {
             let i0 = f * ch;
             for c in 0..ch {
-                let v = buf.samples[i0 + c].abs();
+                let v = samples[i0 + c].abs();
                 if v > peak {
                     peak = v;
                 }
@@ -257,6 +271,10 @@ enum LoadEvent {
     /// completed. The UI drops it if `path` no longer matches the
     /// deck's current track.
     Refined(AnalysisRefined),
+    /// Stem peak arrays for the 3-colour overlay. Sent by the stem
+    /// worker after demucs finishes (~15 s post-load). Dropped if
+    /// the deck has moved on to another track.
+    Stems(StemPeaks),
 }
 
 struct LoadInitial {
@@ -283,6 +301,17 @@ struct AnalysisRefined {
     key: Option<MusicalKey>,
 }
 
+struct StemPeaks {
+    deck: DeckId,
+    path: PathBuf,
+    overview_drums: Vec<f32>,
+    overview_bass: Vec<f32>,
+    overview_melody: Vec<f32>,
+    hires_drums: Vec<f32>,
+    hires_bass: Vec<f32>,
+    hires_melody: Vec<f32>,
+}
+
 struct DeckUi {
     title: Option<String>,
     /// Filesystem path of whatever's currently on the deck. Used to
@@ -292,6 +321,15 @@ struct DeckUi {
     loaded_path: Option<PathBuf>,
     overview: Vec<f32>,
     hires: Vec<f32>,
+    /// Per-stem peak arrays for the 3-colour overlay. Empty until the
+    /// stem worker finishes. Indexed the same way as `overview`/`hires`
+    /// so the renderers can stride over them in parallel.
+    stem_overview_drums: Vec<f32>,
+    stem_overview_bass: Vec<f32>,
+    stem_overview_melody: Vec<f32>,
+    stem_hires_drums: Vec<f32>,
+    stem_hires_bass: Vec<f32>,
+    stem_hires_melody: Vec<f32>,
     samples_per_hires: usize,
     total_frames: u64,
     sample_rate: u32,
@@ -315,6 +353,12 @@ impl DeckUi {
             loaded_path: None,
             overview: Vec::new(),
             hires: Vec::new(),
+            stem_overview_drums: Vec::new(),
+            stem_overview_bass: Vec::new(),
+            stem_overview_melody: Vec::new(),
+            stem_hires_drums: Vec::new(),
+            stem_hires_bass: Vec::new(),
+            stem_hires_melody: Vec::new(),
             samples_per_hires: HIRES_SAMPLES_PER_PEAK,
             total_frames: 0,
             sample_rate: 0,
@@ -510,13 +554,61 @@ impl DjApp {
             if let Some(sc) = stem_cache {
                 let path_s = path.clone();
                 let sender_s = sender.clone();
+                let tx_s = tx.clone();
                 std::thread::spawn(move || {
                     unsafe {
                         libc::setpriority(libc::PRIO_PROCESS, 0, 10);
                     }
                     match sc.separate(&path_s) {
                         Ok(stems) => {
-                            let _ = sender_s.send(DeckCommand::SetStems { deck, stems });
+                            // Compute peaks BEFORE handing the stems
+                            // off to the engine so we can borrow them
+                            // without contention. Melody = vocals +
+                            // other summed at peak-compute time.
+                            let melody_buf: Vec<f32> = stems
+                                .vocals
+                                .iter()
+                                .zip(stems.other.iter())
+                                .map(|(v, o)| v + o)
+                                .collect();
+                            let ch = stems.channels;
+                            let stems_peaks = StemPeaks {
+                                deck,
+                                path: path_s.clone(),
+                                overview_drums: compute_overview_from(
+                                    &stems.drums,
+                                    ch,
+                                    OVERVIEW_BUCKETS,
+                                ),
+                                overview_bass: compute_overview_from(
+                                    &stems.bass,
+                                    ch,
+                                    OVERVIEW_BUCKETS,
+                                ),
+                                overview_melody: compute_overview_from(
+                                    &melody_buf,
+                                    ch,
+                                    OVERVIEW_BUCKETS,
+                                ),
+                                hires_drums: compute_hires_peaks_from(
+                                    &stems.drums,
+                                    ch,
+                                    HIRES_SAMPLES_PER_PEAK,
+                                ),
+                                hires_bass: compute_hires_peaks_from(
+                                    &stems.bass,
+                                    ch,
+                                    HIRES_SAMPLES_PER_PEAK,
+                                ),
+                                hires_melody: compute_hires_peaks_from(
+                                    &melody_buf,
+                                    ch,
+                                    HIRES_SAMPLES_PER_PEAK,
+                                ),
+                            };
+                            let _ =
+                                sender_s.send(DeckCommand::SetStems { deck, stems });
+                            let _ = tx_s.send(LoadEvent::Stems(stems_peaks));
                         }
                         Err(e) => eprintln!("stems: {} failed: {e:#}", path_s.display()),
                     }
@@ -802,6 +894,16 @@ impl DjApp {
                     d.loaded_path = Some(res.path);
                     d.overview = res.overview;
                     d.hires = res.hires;
+                    // Drop any stem peaks from the previous track —
+                    // the new stems will arrive when the worker
+                    // finishes. Renderer falls back to the single
+                    // overview/hires arrays until then.
+                    d.stem_overview_drums.clear();
+                    d.stem_overview_bass.clear();
+                    d.stem_overview_melody.clear();
+                    d.stem_hires_drums.clear();
+                    d.stem_hires_bass.clear();
+                    d.stem_hires_melody.clear();
                     d.samples_per_hires = res.samples_per_hires;
                     d.total_frames = res.total_frames;
                     d.sample_rate = res.sample_rate;
@@ -822,6 +924,18 @@ impl DjApp {
                     d.beat_grid = r.beat_grid;
                     d.downbeats = r.downbeats;
                     d.key = r.key;
+                }
+                LoadEvent::Stems(s) => {
+                    let d = self.deck_mut(s.deck);
+                    if d.loaded_path.as_deref() != Some(s.path.as_path()) {
+                        continue;
+                    }
+                    d.stem_overview_drums = s.overview_drums;
+                    d.stem_overview_bass = s.overview_bass;
+                    d.stem_overview_melody = s.overview_melody;
+                    d.stem_hires_drums = s.hires_drums;
+                    d.stem_hires_bass = s.hires_bass;
+                    d.stem_hires_melody = s.hires_melody;
                 }
             }
         }
@@ -1279,23 +1393,37 @@ fn overview_waveform(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sende
     let w = rect.width();
     let h = rect.height();
     let mid = rect.center().y;
-    let stroke = Stroke::new(1.0, Color32::from_rgb(120, 200, 255));
-    let n = d.overview.len();
-
     let cols = w.ceil() as usize;
-    for x in 0..cols {
-        let t = x as f32 / cols.max(1) as f32;
-        let bucket = (t * n as f32) as usize;
-        if bucket >= n {
-            break;
+    let stems_ready = !d.stem_overview_drums.is_empty()
+        && !d.stem_overview_bass.is_empty()
+        && !d.stem_overview_melody.is_empty();
+    if stems_ready {
+        // 3-colour overlay: drums (red/orange), bass (blue), melody
+        // (yellow-green). Half-alpha so each one is still visible
+        // through the others where they peak together.
+        draw_stem_columns(&painter, &d.stem_overview_drums, STEM_COLOR_DRUMS,
+            rect.left(), mid, h, cols);
+        draw_stem_columns(&painter, &d.stem_overview_bass, STEM_COLOR_BASS,
+            rect.left(), mid, h, cols);
+        draw_stem_columns(&painter, &d.stem_overview_melody, STEM_COLOR_MELODY,
+            rect.left(), mid, h, cols);
+    } else {
+        let stroke = Stroke::new(1.0, Color32::from_rgb(120, 200, 255));
+        let n = d.overview.len();
+        for x in 0..cols {
+            let t = x as f32 / cols.max(1) as f32;
+            let bucket = (t * n as f32) as usize;
+            if bucket >= n {
+                break;
+            }
+            let peak = d.overview[bucket].min(1.0);
+            let half = peak * (h * 0.5);
+            let x_px = rect.left() + x as f32;
+            painter.line_segment(
+                [Pos2::new(x_px, mid - half), Pos2::new(x_px, mid + half)],
+                stroke,
+            );
         }
-        let peak = d.overview[bucket].min(1.0);
-        let half = peak * (h * 0.5);
-        let x_px = rect.left() + x as f32;
-        painter.line_segment(
-            [Pos2::new(x_px, mid - half), Pos2::new(x_px, mid + half)],
-            stroke,
-        );
     }
 
     let head_frac = d.telemetry.playhead_frames() as f32 / d.total_frames.max(1) as f32;
@@ -1352,34 +1480,27 @@ fn zoom_view(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
     if !d.hires.is_empty() && d.sample_rate > 0 {
         let peaks_per_sec = d.sample_rate as f64 / d.samples_per_hires as f64;
         let track_secs = d.total_frames as f64 / d.sample_rate as f64;
-        let stroke = Stroke::new(1.0, Color32::from_rgb(120, 200, 255));
         let cols = w.ceil() as usize;
-        for x in 0..cols {
-            let frac0 = x as f64 / cols.max(1) as f64;
-            let frac1 = (x + 1) as f64 / cols.max(1) as f64;
-            let t0 = view_start + frac0 * window_secs;
-            let t1 = view_start + frac1 * window_secs;
-            if t1 <= 0.0 || t0 >= track_secs {
-                continue;
+        let stems_ready = !d.stem_hires_drums.is_empty()
+            && !d.stem_hires_bass.is_empty()
+            && !d.stem_hires_melody.is_empty();
+        if stems_ready {
+            for (peaks, color) in [
+                (&d.stem_hires_drums, STEM_COLOR_DRUMS),
+                (&d.stem_hires_bass, STEM_COLOR_BASS),
+                (&d.stem_hires_melody, STEM_COLOR_MELODY),
+            ] {
+                let stroke = Stroke::new(1.0, color);
+                draw_zoom_columns(
+                    &painter, peaks, peaks_per_sec, view_start, window_secs,
+                    track_secs, rect.left(), mid, h * 0.45, cols, stroke,
+                );
             }
-            let t0c = t0.max(0.0);
-            let t1c = t1.min(track_secs);
-            let p0 = (t0c * peaks_per_sec) as usize;
-            let p1 = ((t1c * peaks_per_sec) as usize).min(d.hires.len());
-            if p0 >= p1 {
-                continue;
-            }
-            let mut peak = 0.0f32;
-            for p in p0..p1 {
-                if d.hires[p] > peak {
-                    peak = d.hires[p];
-                }
-            }
-            let half = peak.min(1.0) * (h * 0.45);
-            let x_px = rect.left() + x as f32;
-            painter.line_segment(
-                [Pos2::new(x_px, mid - half), Pos2::new(x_px, mid + half)],
-                stroke,
+        } else {
+            let stroke = Stroke::new(1.0, Color32::from_rgb(120, 200, 255));
+            draw_zoom_columns(
+                &painter, &d.hires, peaks_per_sec, view_start, window_secs,
+                track_secs, rect.left(), mid, h * 0.45, cols, stroke,
             );
         }
     }
@@ -1520,3 +1641,85 @@ fn handle_keys(ctx: &egui::Context, sender: &Sender) {
         }
     });
 }
+
+/// Per-column draw for the overview waveform's stem overlay. Iterates
+/// pixel columns, maps each to a bucket in `peaks`, draws a vertical
+/// line at the column's peak amplitude. Used per-stem with different
+/// colours so the three stems alpha-blend on screen.
+fn draw_stem_columns(
+    painter: &egui::Painter,
+    peaks: &[f32],
+    color: egui::Color32,
+    left: f32,
+    mid: f32,
+    h: f32,
+    cols: usize,
+) {
+    if peaks.is_empty() {
+        return;
+    }
+    let n = peaks.len();
+    let stroke = egui::Stroke::new(1.0, color);
+    for x in 0..cols {
+        let t = x as f32 / cols.max(1) as f32;
+        let bucket = (t * n as f32) as usize;
+        if bucket >= n {
+            break;
+        }
+        let peak = peaks[bucket].min(1.0);
+        let half = peak * (h * 0.5);
+        let x_px = left + x as f32;
+        painter.line_segment(
+            [egui::Pos2::new(x_px, mid - half), egui::Pos2::new(x_px, mid + half)],
+            stroke,
+        );
+    }
+}
+
+/// Per-column draw for the zoom view's hi-res peaks (single stream or
+/// per-stem). Mirrors the inline loop the zoom view used to do, so
+/// the stem overlay reuses the same time-mapping logic.
+#[allow(clippy::too_many_arguments)]
+fn draw_zoom_columns(
+    painter: &egui::Painter,
+    peaks: &[f32],
+    peaks_per_sec: f64,
+    view_start: f64,
+    window_secs: f64,
+    track_secs: f64,
+    left: f32,
+    mid: f32,
+    half_max: f32,
+    cols: usize,
+    stroke: egui::Stroke,
+) {
+    for x in 0..cols {
+        let frac0 = x as f64 / cols.max(1) as f64;
+        let frac1 = (x + 1) as f64 / cols.max(1) as f64;
+        let t0 = view_start + frac0 * window_secs;
+        let t1 = view_start + frac1 * window_secs;
+        if t1 <= 0.0 || t0 >= track_secs {
+            continue;
+        }
+        let t0c = t0.max(0.0);
+        let t1c = t1.min(track_secs);
+        let p0 = (t0c * peaks_per_sec) as usize;
+        let p1 = ((t1c * peaks_per_sec) as usize).min(peaks.len());
+        if p0 >= p1 {
+            continue;
+        }
+        let mut peak = 0.0f32;
+        for p in p0..p1 {
+            if peaks[p] > peak {
+                peak = peaks[p];
+            }
+        }
+        let half = peak.min(1.0) * half_max;
+        let x_px = left + x as f32;
+        painter.line_segment(
+            [egui::Pos2::new(x_px, mid - half), egui::Pos2::new(x_px, mid + half)],
+            stroke,
+        );
+    }
+}
+
