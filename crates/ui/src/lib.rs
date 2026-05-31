@@ -786,14 +786,11 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
         DeckId::A => "Deck A",
         DeckId::B => "Deck B",
     };
+    // Header row. Title is truncated (ellipsis) so a long filename never
+    // wraps and pushes the controls below around.
     ui.horizontal(|ui| {
         ui.heading(label);
         ui.separator();
-        let title = d.title.as_deref().unwrap_or("(no track)");
-        ui.label(title);
-        ui.separator();
-        // Effective BPM = analysis BPM × current speed ratio. Shows what the
-        // deck is actually playing at, for visual beat-matching.
         let speed = d.telemetry.current_speed();
         let bpm_str = if d.bpm > 0.0 {
             if (speed - 1.0).abs() < 0.0005 {
@@ -812,6 +809,8 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
         };
         ui.label(key_str);
     });
+    let title = d.title.as_deref().unwrap_or("(no track)");
+    ui.add(egui::Label::new(title).truncate());
 
     // Transport: Play / CUE / Q / 🔒 / Sync / 🎧.
     ui.horizontal(|ui| {
@@ -867,34 +866,17 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
 
     ui.add_space(6.0);
 
-    // EQ rotary knobs (Pioneer-style HIGH / MID / LOW). Drag vertically
-    // on a knob to change its value; double-click to reset to 0 dB.
+    // Channel-strip layout — like a real DJ mixer. Pitch fader on the
+    // left (traditionally a "deck" control), then the channel strip on
+    // the right: HIGH / MID / LOW knobs stacked above the VOL fader.
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 14.0;
-        let cur_high = d.telemetry.current_eq_high_db();
-        if let Some(v) = knob(ui, "HIGH", cur_high, -25.0..=6.0, 56.0) {
-            let _ = sender.send(DeckCommand::SetEqHigh { deck, db: v });
-        }
-        let cur_mid = d.telemetry.current_eq_mid_db();
-        if let Some(v) = knob(ui, "MID", cur_mid, -25.0..=6.0, 56.0) {
-            let _ = sender.send(DeckCommand::SetEqMid { deck, db: v });
-        }
-        let cur_low = d.telemetry.current_eq_low_db();
-        if let Some(v) = knob(ui, "LOW", cur_low, -25.0..=6.0, 56.0) {
-            let _ = sender.send(DeckCommand::SetEqLow { deck, db: v });
-        }
-    });
-
-    ui.add_space(10.0);
-
-    // Vertical PITCH and VOL faders, side by side.
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 20.0;
+        ui.spacing_mut().item_spacing.x = 24.0;
+        // Left: PITCH.
         ui.vertical(|ui| {
             ui.label("PITCH");
             let mut speed = d.telemetry.current_speed();
             let r = ui.add_sized(
-                [50.0, 170.0],
+                [50.0, 240.0],
                 egui::Slider::new(&mut speed, PITCH_MIN..=PITCH_MAX)
                     .vertical()
                     .fixed_decimals(3)
@@ -905,11 +887,25 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
             }
             ui.label(format!("{:.3}", speed));
         });
+        // Right: EQ knobs stacked above VOL fader.
         ui.vertical(|ui| {
+            let cur_high = d.telemetry.current_eq_high_db();
+            if let Some(v) = knob(ui, "HIGH", cur_high, -25.0..=6.0, 50.0) {
+                let _ = sender.send(DeckCommand::SetEqHigh { deck, db: v });
+            }
+            let cur_mid = d.telemetry.current_eq_mid_db();
+            if let Some(v) = knob(ui, "MID", cur_mid, -25.0..=6.0, 50.0) {
+                let _ = sender.send(DeckCommand::SetEqMid { deck, db: v });
+            }
+            let cur_low = d.telemetry.current_eq_low_db();
+            if let Some(v) = knob(ui, "LOW", cur_low, -25.0..=6.0, 50.0) {
+                let _ = sender.send(DeckCommand::SetEqLow { deck, db: v });
+            }
+            ui.add_space(6.0);
             ui.label("VOL");
             let mut gain = d.telemetry.current_gain();
             let r = ui.add_sized(
-                [50.0, 170.0],
+                [50.0, 130.0],
                 egui::Slider::new(&mut gain, 0.0..=1.0)
                     .vertical()
                     .fixed_decimals(2)

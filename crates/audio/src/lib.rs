@@ -549,7 +549,10 @@ impl Mixer {
                 deck.playhead = 0.0;
                 deck.cue_frame = 0;
                 deck.in_preview = false;
-                deck.playing = false;
+                // Keep the deck's play state across a track swap — if the
+                // user was playing and loads a new track, it starts right
+                // away. Reset only when paused.
+                deck.playing = was_playing;
                 // Reset envelope so a fresh load doesn't carry over
                 // residual fade-out from the previous track.
                 deck.play_envelope = 0.0;
