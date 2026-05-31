@@ -31,13 +31,17 @@ plate_t = 3;
 // ===== Linear faders (pitch on left, volume on right) =====
 // User-supplied: 65 mm between fader centres, 80 mm hole-to-hole mounting,
 // M3 screws.
-fader_spacing     = 65;     // centre-to-centre between the two faders
+fader_spacing     = 85;     // centre-to-centre between the two faders
+                            // (each fader sits 10 mm further from centre
+                            // than the original 65 mm so the arcade buttons
+                            // have more breathing room next to the faders)
 fader_mount_pitch = 80;     // hole-to-hole along the fader
 fader_slot_len    = 60;     // travel slot (typical for 80 mm-mount fader)
 fader_slot_w      = 4;      // slot width — clearance for the fader stem
 fader_screw_d     = 3.2;    // M3 clearance
 
-pitch_x  = 30;
+pitch_x  = 20;              // 10 mm further left than original (30) so the
+                            // faders give the arcade buttons more room
 pitch_cy = 132;             // slot midpoint
 vol_x    = pitch_x + fader_spacing;
 vol_cy   = 62;              // lower (EQ pots stack above)
@@ -67,10 +71,9 @@ enc_screw_d        = 3.2;
 // Stacked above the volume fader. HIGH at top, MID middle, LOW just above the fader.
 pot_bushing_d  = 7.5;       // 7 mm bushing + 0.5 mm clearance
 pot_tab_d      = 3.0;       // 2.7 mm tab + clearance
-pot_tab_offset = 8.65;      // tab centre offset from shaft centre (12 o'clock).
-                            // Derived from a measured 4.3 mm shaft-to-tab edge-
-                            // to-edge: 4.3 + 6/2 + 2.7/2 = 8.65. (Standard 9 mm
-                            // Alpha pots are usually 6.6; this one's larger.)
+pot_tab_offset = 7.5;       // tab centre offset from shaft centre (12 o'clock),
+                            // measured directly on the user's pots. Standard
+                            // 9 mm Alpha pots are 6.6; this one's a bit larger.
 pot_x          = vol_x;     // aligned with the volume fader
 pot_y_low      = 127;
 pot_y_mid      = 162;
