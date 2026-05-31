@@ -18,7 +18,10 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
-use tract_onnx::prelude::*;
+use ndarray::Array3;
+use ort::execution_providers::CUDAExecutionProvider;
+use ort::session::{Session, builder::GraphOptimizationLevel};
+use ort::value::Tensor;
 
 /// Frames-per-second of the model's input + output. beat_this is fixed
 /// at 22050 Hz audio with 441-sample hop → exactly 50 fps.
@@ -42,8 +45,6 @@ pub const fn chunk_n_frames() -> usize {
 /// except at the very start / very end of the piece.
 const BORDER: usize = 6;
 
-type Plan = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
-
 /// On-disk location for the bundled beat_this ONNX weights. Honours
 /// `$XDG_CACHE_HOME` then falls back to `$HOME/.cache/`. The user runs
 /// `python downbeat-spike/export_onnx.py` once to drop the 84 MB file
@@ -56,11 +57,12 @@ pub fn model_path() -> PathBuf {
     cache.join("dj").join("model_final0.onnx")
 }
 
-/// Lazily-compiled model. Loading + tract's graph optimisation takes a
-/// minute, do it once per process. The compiled plan is immutable so
-/// it's safe to share across the analysis worker's threads.
-fn model() -> Result<&'static Plan> {
-    static MODEL: OnceLock<Plan> = OnceLock::new();
+/// Lazily-loaded ONNX Runtime session. The first call pays ~1 s of
+/// graph parse + CUDA EP init; the compiled session is then reused
+/// across the worker thread + any synchronous loads. `Session` is
+/// `Send + Sync`, so a single shared instance is fine.
+fn model() -> Result<&'static Session> {
+    static MODEL: OnceLock<Session> = OnceLock::new();
     if let Some(m) = MODEL.get() {
         return Ok(m);
     }
@@ -73,35 +75,33 @@ fn model() -> Result<&'static Plan> {
             path.display()
         );
     }
-    let m = tract_onnx::onnx()
-        .model_for_path(&path)
-        .with_context(|| format!("parsing ONNX model at {}", path.display()))?
-        .with_input_fact(0, f32::fact(&[1, CHUNK, N_MELS]).into())?
-        .into_optimized()
-        .context("optimising tract graph")?
-        .into_runnable()
-        .context("compiling tract plan")?;
-    Ok(MODEL.get_or_init(|| m))
+    // Try CUDA first; ort silently falls back to CPU if the CUDA EP
+    // can't initialise (no CUDA libs, no compatible GPU). We log the
+    // chosen path once so the user knows what they got.
+    let session = Session::builder()
+        .context("ort Session::builder()")?
+        .with_optimization_level(GraphOptimizationLevel::Level3)?
+        .with_execution_providers([CUDAExecutionProvider::default().build()])?
+        .commit_from_file(&path)
+        .with_context(|| format!("loading ONNX model at {}", path.display()))?;
+    eprintln!("analysis: ort session ready (CUDA EP requested)");
+    Ok(MODEL.get_or_init(|| session))
 }
 
 /// Run a single (batch=1, time=CHUNK, mel=N_MELS) input through the
 /// model. Returns (beat_logits, downbeat_logits), each of length CHUNK.
 pub fn infer_chunk(mel_chunk: &[f32]) -> Result<(Vec<f32>, Vec<f32>)> {
     assert_eq!(mel_chunk.len(), CHUNK * N_MELS);
-    let plan = model()?;
-    let input = tract_ndarray::Array3::from_shape_vec(
-        (1, CHUNK, N_MELS),
-        mel_chunk.to_vec(),
-    )?
-    .into_tensor();
-    let outputs = plan.run(tvec!(input.into()))?;
-    let beat = outputs[0]
-        .to_array_view::<f32>()?
+    let session = model()?;
+    let input: Array3<f32> = Array3::from_shape_vec((1, CHUNK, N_MELS), mel_chunk.to_vec())?;
+    let outputs = session.run(ort::inputs!["spect" => Tensor::from_array(input)?]?)?;
+    let beat = outputs["beat"]
+        .try_extract_tensor::<f32>()?
         .as_slice()
         .context("beat output not contiguous")?
         .to_vec();
-    let downbeat = outputs[1]
-        .to_array_view::<f32>()?
+    let downbeat = outputs["downbeat"]
+        .try_extract_tensor::<f32>()?
         .as_slice()
         .context("downbeat output not contiguous")?
         .to_vec();

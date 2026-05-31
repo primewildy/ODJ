@@ -7,7 +7,9 @@ version.workspace = true
 control = { path = "../control" }
 rustfft = { workspace = true }
 anyhow = { workspace = true }
-tract-onnx = { workspace = true }
+ort = { workspace = true }
+ort-sys = { workspace = true }
+ndarray = { workspace = true }
 
 [dev-dependencies]
 decode = { path = "../decode" }

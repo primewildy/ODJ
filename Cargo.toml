@@ -40,11 +40,15 @@ egui_extras = "0.28"
 rustfft = "6"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
-# Pure-Rust ONNX inference. Used by the analysis crate for beat_this
-# downbeat inference. We picked tract over `ort` to avoid the native
-# libonnxruntime download (and the periodic breakage from the
-# ort-sys download build script). For a 2 MB model this is fast enough.
-tract-onnx = "0.21"
+# ONNX Runtime bindings — used by the analysis crate for beat_this
+# downbeat inference on the GPU. download-binaries pulls a prebuilt
+# libonnxruntime (with the CUDA EP linked) at build time; the `cuda`
+# feature wires up the runtime path to actually use it. Pinned to
+# rc.9 because rc.10+ ship an ort-sys build script that's broken
+# against newer ureq (`tls_config` no longer exists).
+ort = { version = "=2.0.0-rc.9", default-features = false, features = ["download-binaries", "copy-dylibs", "ndarray", "cuda"] }
+ort-sys = { version = "=2.0.0-rc.9" }
+ndarray = "0.16"
 
 [profile.dev]
 opt-level = 1
