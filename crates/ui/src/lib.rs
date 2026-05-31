@@ -939,8 +939,19 @@ impl DjApp {
                 LoadEvent::Stems(s) => {
                     let d = self.deck_mut(s.deck);
                     if d.loaded_path.as_deref() != Some(s.path.as_path()) {
+                        eprintln!(
+                            "stems: drop (deck moved on) — got {:?}, deck has {:?}",
+                            s.path.file_name(),
+                            d.loaded_path.as_ref().and_then(|p| p.file_name()),
+                        );
                         continue;
                     }
+                    eprintln!(
+                        "stems: applied — {} frames @ {} Hz, {} ch",
+                        s.stems.frames(),
+                        s.stems.sample_rate,
+                        s.stems.channels,
+                    );
                     d.stem_overview_drums = s.overview_drums;
                     d.stem_overview_bass = s.overview_bass;
                     d.stem_overview_melody = s.overview_melody;

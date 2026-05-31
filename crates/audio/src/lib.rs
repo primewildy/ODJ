@@ -749,6 +749,17 @@ impl Mixer {
                 deck.gain_melody = gain.clamp(0.0, 1.5);
             }
             DeckCommand::SetStems { stems, .. } => {
+                if let Some(buf) = deck.buffer.as_ref() {
+                    eprintln!(
+                        "audio: SetStems — buf {} fr @ {} Hz {} ch | stems {} fr @ {} Hz {} ch | match? {}",
+                        buf.frames(), buf.sample_rate, buf.channels,
+                        stems.frames(), stems.sample_rate, stems.channels,
+                        stems.channels as usize == buf.channels as usize
+                            && stems.frames() >= buf.frames(),
+                    );
+                } else {
+                    eprintln!("audio: SetStems with no buffer loaded — dropping");
+                }
                 deck.stems = Some(stems);
             }
             DeckCommand::SetBeatAlign { on, .. } => {
