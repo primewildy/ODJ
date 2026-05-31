@@ -74,8 +74,8 @@ pub struct DeckTelemetry {
     pub eq_mid_db: Arc<AtomicU32>,  // f32 bits
     pub eq_high_db: Arc<AtomicU32>, // f32 bits
     pub stem_drums: Arc<AtomicU32>, // f32 bits
-    pub stem_bass: Arc<AtomicU32>,  // f32 bits
-    pub stem_melody: Arc<AtomicU32>, // f32 bits
+    pub stem_vocals: Arc<AtomicU32>,  // f32 bits
+    pub stem_instruments: Arc<AtomicU32>, // f32 bits
     /// `true` once stem buffers have arrived for this deck's current
     /// track. The UI uses this to grey out / activate the stem knobs.
     pub stems_loaded: Arc<AtomicBool>,
@@ -96,8 +96,8 @@ impl DeckTelemetry {
             eq_mid_db: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
             eq_high_db: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
             stem_drums: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
-            stem_bass: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
-            stem_melody: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
+            stem_vocals: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
+            stem_instruments: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
             stems_loaded: Arc::new(AtomicBool::new(false)),
             cue_on: Arc::new(AtomicBool::new(false)),
         }
@@ -133,11 +133,11 @@ impl DeckTelemetry {
     pub fn current_stem_drums(&self) -> f32 {
         f32::from_bits(self.stem_drums.load(Ordering::Relaxed))
     }
-    pub fn current_stem_bass(&self) -> f32 {
-        f32::from_bits(self.stem_bass.load(Ordering::Relaxed))
+    pub fn current_stem_vocals(&self) -> f32 {
+        f32::from_bits(self.stem_vocals.load(Ordering::Relaxed))
     }
-    pub fn current_stem_melody(&self) -> f32 {
-        f32::from_bits(self.stem_melody.load(Ordering::Relaxed))
+    pub fn current_stem_instruments(&self) -> f32 {
+        f32::from_bits(self.stem_instruments.load(Ordering::Relaxed))
     }
     pub fn are_stems_loaded(&self) -> bool {
         self.stems_loaded.load(Ordering::Relaxed)
@@ -471,8 +471,8 @@ struct DeckState {
     /// Per-stem linear gain. 1.0 = unity. Clamped to [0.0, 1.5] by
     /// the command handlers. melody = vocals + other summed.
     gain_drums: f32,
-    gain_bass: f32,
-    gain_melody: f32,
+    gain_vocals: f32,
+    gain_instruments: f32,
 }
 
 impl DeckState {
@@ -502,8 +502,8 @@ impl DeckState {
             play_envelope: 0.0,
             stems: None,
             gain_drums: 1.0,
-            gain_bass: 1.0,
-            gain_melody: 1.0,
+            gain_vocals: 1.0,
+            gain_instruments: 1.0,
         }
     }
 }
@@ -742,11 +742,11 @@ impl Mixer {
             DeckCommand::SetStemDrums { gain, .. } => {
                 deck.gain_drums = gain.clamp(0.0, 1.5);
             }
-            DeckCommand::SetStemBass { gain, .. } => {
-                deck.gain_bass = gain.clamp(0.0, 1.5);
+            DeckCommand::SetStemVocals { gain, .. } => {
+                deck.gain_vocals = gain.clamp(0.0, 1.5);
             }
-            DeckCommand::SetStemMelody { gain, .. } => {
-                deck.gain_melody = gain.clamp(0.0, 1.5);
+            DeckCommand::SetStemInstruments { gain, .. } => {
+                deck.gain_instruments = gain.clamp(0.0, 1.5);
             }
             DeckCommand::SetStems { stems, .. } => {
                 if let Some(buf) = deck.buffer.as_ref() {
@@ -953,10 +953,10 @@ fn publish_telemetry(deck: &DeckState, tel: &DeckTelemetry) {
         .store(deck.eq_high_db.to_bits(), Ordering::Relaxed);
     tel.stem_drums
         .store(deck.gain_drums.to_bits(), Ordering::Relaxed);
-    tel.stem_bass
-        .store(deck.gain_bass.to_bits(), Ordering::Relaxed);
-    tel.stem_melody
-        .store(deck.gain_melody.to_bits(), Ordering::Relaxed);
+    tel.stem_vocals
+        .store(deck.gain_vocals.to_bits(), Ordering::Relaxed);
+    tel.stem_instruments
+        .store(deck.gain_instruments.to_bits(), Ordering::Relaxed);
     tel.stems_loaded
         .store(deck.stems.is_some(), Ordering::Relaxed);
     tel.cue_on.store(deck.cue_on, Ordering::Relaxed);
@@ -1054,13 +1054,28 @@ fn render_deck(deck: &mut DeckState, out: &mut [f32], out_channels: usize, engin
     // Use stems iff they exist AND their layout matches the source.
     // Cheap defence — demucs always emits matching geometry but the
     // user could in principle have swapped a file under our feet.
+    // Demucs sometimes emits ±a few samples off the source length at
+    // chunk boundaries, so accept the swap if the stems are within
+    // ~1 s of the source frame count. Out-of-bounds reads inside the
+    // render loop are still guarded by the existing `pos + 1 >=
+    // total_frames` check, which now uses the SHORTER of the two
+    // buffers (see `total_frames` recompute below).
     let use_stems = matches!(
         stems_arc.as_deref(),
-        Some(s) if s.channels as usize == in_channels && s.frames() >= total_frames
+        Some(s) if s.channels as usize == in_channels
+            && s.frames() + (s.sample_rate as usize) >= total_frames
     );
+    // When stems are in play, shrink the playable range to whatever
+    // both buffers can cover so we never index past either one.
+    let total_frames = if use_stems {
+        let s = stems_arc.as_deref().unwrap();
+        total_frames.min(s.frames())
+    } else {
+        total_frames
+    };
     let g_drums = deck.gain_drums;
-    let g_bass = deck.gain_bass;
-    let g_melody = deck.gain_melody;
+    let g_vocals = deck.gain_vocals;
+    let g_instr = deck.gain_instruments;
     let effective_speed = (deck.speed_ratio + deck.nudge_offset).clamp(-4.0, 4.0);
     let step = (buf_arc.sample_rate as f64 / engine_rate as f64) * effective_speed as f64;
 
@@ -1082,7 +1097,7 @@ fn render_deck(deck: &mut DeckState, out: &mut [f32], out_channels: usize, engin
 
         if in_channels == 1 {
             let s = sample_at(samples, stems_arc.as_deref(), use_stems, i0, i1, t,
-                g_drums, g_bass, g_melody);
+                g_drums, g_vocals, g_instr);
             for ch in frame.iter_mut() {
                 *ch += s;
             }
@@ -1090,7 +1105,7 @@ fn render_deck(deck: &mut DeckState, out: &mut [f32], out_channels: usize, engin
             let n = out_channels.min(in_channels);
             for ch in 0..n {
                 let s = sample_at(samples, stems_arc.as_deref(), use_stems,
-                    i0 + ch, i1 + ch, t, g_drums, g_bass, g_melody);
+                    i0 + ch, i1 + ch, t, g_drums, g_vocals, g_instr);
                 frame[ch] += s;
             }
         }
@@ -1112,17 +1127,20 @@ fn sample_at(
     i1: usize,
     t: f32,
     g_drums: f32,
-    g_bass: f32,
-    g_melody: f32,
+    g_vocals: f32,
+    g_instr: f32,
 ) -> f32 {
     if use_stems {
         let s = stems.expect("use_stems => Some");
         let inv = 1.0 - t;
         let d = s.drums[i0] * inv + s.drums[i1] * t;
-        let b = s.bass[i0] * inv + s.bass[i1] * t;
         let v = s.vocals[i0] * inv + s.vocals[i1] * t;
+        let b = s.bass[i0] * inv + s.bass[i1] * t;
         let o = s.other[i0] * inv + s.other[i1] * t;
-        d * g_drums + b * g_bass + (v + o) * g_melody
+        // DRUMS knob → drums stem only.
+        // VOCALS knob → vocals stem only (isolation for mashups).
+        // INSTRUMENTS knob → bass + other (everything else).
+        d * g_drums + v * g_vocals + (b + o) * g_instr
     } else {
         samples[i0] * (1.0 - t) + samples[i1] * t
     }
@@ -1152,13 +1170,28 @@ fn render_deck_pv(deck: &mut DeckState, out: &mut [f32], out_channels: usize, en
     let buf_arc = Arc::clone(buf);
     let samples = &buf_arc.samples[..];
     let stems_arc = deck.stems.as_ref().map(Arc::clone);
+    // Demucs sometimes emits ±a few samples off the source length at
+    // chunk boundaries, so accept the swap if the stems are within
+    // ~1 s of the source frame count. Out-of-bounds reads inside the
+    // render loop are still guarded by the existing `pos + 1 >=
+    // total_frames` check, which now uses the SHORTER of the two
+    // buffers (see `total_frames` recompute below).
     let use_stems = matches!(
         stems_arc.as_deref(),
-        Some(s) if s.channels as usize == in_channels && s.frames() >= total_frames
+        Some(s) if s.channels as usize == in_channels
+            && s.frames() + (s.sample_rate as usize) >= total_frames
     );
+    // When stems are in play, shrink the playable range to whatever
+    // both buffers can cover so we never index past either one.
+    let total_frames = if use_stems {
+        let s = stems_arc.as_deref().unwrap();
+        total_frames.min(s.frames())
+    } else {
+        total_frames
+    };
     let g_drums = deck.gain_drums;
-    let g_bass = deck.gain_bass;
-    let g_melody = deck.gain_melody;
+    let g_vocals = deck.gain_vocals;
+    let g_instr = deck.gain_instruments;
     let src_step = buf_arc.sample_rate as f64 / engine_rate as f64;
     let total_out_frames = out.len() / out_channels;
     let mut written = 0;
@@ -1183,7 +1216,7 @@ fn render_deck_pv(deck: &mut DeckState, out: &mut [f32], out_channels: usize, en
                 let i1 = i0 + in_channels;
                 if in_channels == 1 {
                     let s = sample_at(samples, stems_arc.as_deref(), use_stems,
-                        i0, i1, t, g_drums, g_bass, g_melody);
+                        i0, i1, t, g_drums, g_vocals, g_instr);
                     for c in 0..pv_channels {
                         deck.pvoc.input_buf[c][i] = s;
                     }
@@ -1191,7 +1224,7 @@ fn render_deck_pv(deck: &mut DeckState, out: &mut [f32], out_channels: usize, en
                     for c in 0..pv_channels {
                         let src_c = c.min(in_channels - 1);
                         let s = sample_at(samples, stems_arc.as_deref(), use_stems,
-                            i0 + src_c, i1 + src_c, t, g_drums, g_bass, g_melody);
+                            i0 + src_c, i1 + src_c, t, g_drums, g_vocals, g_instr);
                         deck.pvoc.input_buf[c][i] = s;
                     }
                 }
@@ -1220,8 +1253,8 @@ fn cmd_target(cmd: &DeckCommand) -> DeckId {
         DeckCommand::LoadTrack { deck, .. }
         | DeckCommand::UpdateAnalysis { deck, .. }
         | DeckCommand::SetStemDrums { deck, .. }
-        | DeckCommand::SetStemBass { deck, .. }
-        | DeckCommand::SetStemMelody { deck, .. }
+        | DeckCommand::SetStemVocals { deck, .. }
+        | DeckCommand::SetStemInstruments { deck, .. }
         | DeckCommand::SetStems { deck, .. }
         | DeckCommand::Play(deck)
         | DeckCommand::Pause(deck)

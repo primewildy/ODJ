@@ -154,12 +154,14 @@ pub enum DeckCommand {
     /// High-shelf gain in dB. Typical -25..+6, 0 = flat. Shelf at 4 kHz.
     SetEqHigh { deck: DeckId, db: f32 },
     /// Per-deck stem gains. Linear 0.0..=1.0+. Default 1.0 (unity).
-    /// "melody" = vocals + other summed at playback (see
-    /// docs/notes/stem_separation.md for the 4-stem-source / 3-control
-    /// rationale). No-op until the deck's stem buffers are loaded.
+    /// "instruments" = bass + other summed at playback — everything
+    /// that isn't drums or vocals. (HTDemucs gives 4 stems; we expose
+    /// 3 controls because mixing 6 is past human capacity in real
+    /// time. See docs/notes/stem_separation.md.) No-op until the
+    /// deck's stem buffers are loaded.
     SetStemDrums { deck: DeckId, gain: f32 },
-    SetStemBass { deck: DeckId, gain: f32 },
-    SetStemMelody { deck: DeckId, gain: f32 },
+    SetStemVocals { deck: DeckId, gain: f32 },
+    SetStemInstruments { deck: DeckId, gain: f32 },
     /// Replace the deck's stem buffers without resetting playback. Sent
     /// by the async stem-separation worker when results land.
     SetStems {

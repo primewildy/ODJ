@@ -28,8 +28,8 @@ const ZOOM_PLAYHEAD_FRAC: f32 = 0.33;
 // rather than mask each other. Drums = warm red (impact / energy),
 // bass = blue (low end), melody = yellow-green (vocals + harmonic).
 const STEM_COLOR_DRUMS: egui::Color32 = egui::Color32::from_rgba_premultiplied(110, 40, 30, 130);
-const STEM_COLOR_BASS: egui::Color32 = egui::Color32::from_rgba_premultiplied(40, 70, 110, 130);
-const STEM_COLOR_MELODY: egui::Color32 = egui::Color32::from_rgba_premultiplied(90, 110, 40, 130);
+const STEM_COLOR_VOCALS: egui::Color32 = egui::Color32::from_rgba_premultiplied(40, 70, 110, 130);
+const STEM_COLOR_INSTR: egui::Color32 = egui::Color32::from_rgba_premultiplied(90, 110, 40, 130);
 
 /// Background worker that fills the analysis cache by decoding +
 /// analysing each track that's not already in the cache. Spawned once at
@@ -309,11 +309,11 @@ struct StemPeaks {
     /// gets stems for a track the user already moved on from.
     stems: Arc<control::TrackStems>,
     overview_drums: Vec<f32>,
-    overview_bass: Vec<f32>,
-    overview_melody: Vec<f32>,
+    overview_vocals: Vec<f32>,
+    overview_instr: Vec<f32>,
     hires_drums: Vec<f32>,
-    hires_bass: Vec<f32>,
-    hires_melody: Vec<f32>,
+    hires_vocals: Vec<f32>,
+    hires_instr: Vec<f32>,
 }
 
 struct DeckUi {
@@ -329,11 +329,11 @@ struct DeckUi {
     /// stem worker finishes. Indexed the same way as `overview`/`hires`
     /// so the renderers can stride over them in parallel.
     stem_overview_drums: Vec<f32>,
-    stem_overview_bass: Vec<f32>,
-    stem_overview_melody: Vec<f32>,
+    stem_overview_vocals: Vec<f32>,
+    stem_overview_instr: Vec<f32>,
     stem_hires_drums: Vec<f32>,
-    stem_hires_bass: Vec<f32>,
-    stem_hires_melody: Vec<f32>,
+    stem_hires_vocals: Vec<f32>,
+    stem_hires_instr: Vec<f32>,
     samples_per_hires: usize,
     total_frames: u64,
     sample_rate: u32,
@@ -358,11 +358,11 @@ impl DeckUi {
             overview: Vec::new(),
             hires: Vec::new(),
             stem_overview_drums: Vec::new(),
-            stem_overview_bass: Vec::new(),
-            stem_overview_melody: Vec::new(),
+            stem_overview_vocals: Vec::new(),
+            stem_overview_instr: Vec::new(),
             stem_hires_drums: Vec::new(),
-            stem_hires_bass: Vec::new(),
-            stem_hires_melody: Vec::new(),
+            stem_hires_vocals: Vec::new(),
+            stem_hires_instr: Vec::new(),
             samples_per_hires: HIRES_SAMPLES_PER_PEAK,
             total_frames: 0,
             sample_rate: 0,
@@ -567,13 +567,16 @@ impl DjApp {
                         Ok(stems) => {
                             // Compute peaks BEFORE handing the stems
                             // off to the engine so we can borrow them
-                            // without contention. Melody = vocals +
-                            // other summed at peak-compute time.
-                            let melody_buf: Vec<f32> = stems
-                                .vocals
+                            // without contention. The "instruments"
+                            // peak track sums bass + other for
+                            // visualisation, matching the mixer's
+                            // (bass + other) * gain_instruments
+                            // routing.
+                            let instr_buf: Vec<f32> = stems
+                                .bass
                                 .iter()
                                 .zip(stems.other.iter())
-                                .map(|(v, o)| v + o)
+                                .map(|(b, o)| b + o)
                                 .collect();
                             let ch = stems.channels;
                             let stems_peaks = StemPeaks {
@@ -585,13 +588,13 @@ impl DjApp {
                                     ch,
                                     OVERVIEW_BUCKETS,
                                 ),
-                                overview_bass: compute_overview_from(
+                                overview_vocals: compute_overview_from(
                                     &stems.bass,
                                     ch,
                                     OVERVIEW_BUCKETS,
                                 ),
-                                overview_melody: compute_overview_from(
-                                    &melody_buf,
+                                overview_instr: compute_overview_from(
+                                    &instr_buf,
                                     ch,
                                     OVERVIEW_BUCKETS,
                                 ),
@@ -600,13 +603,13 @@ impl DjApp {
                                     ch,
                                     HIRES_SAMPLES_PER_PEAK,
                                 ),
-                                hires_bass: compute_hires_peaks_from(
+                                hires_vocals: compute_hires_peaks_from(
                                     &stems.bass,
                                     ch,
                                     HIRES_SAMPLES_PER_PEAK,
                                 ),
-                                hires_melody: compute_hires_peaks_from(
-                                    &melody_buf,
+                                hires_instr: compute_hires_peaks_from(
+                                    &instr_buf,
                                     ch,
                                     HIRES_SAMPLES_PER_PEAK,
                                 ),
@@ -910,11 +913,11 @@ impl DjApp {
                     // finishes. Renderer falls back to the single
                     // overview/hires arrays until then.
                     d.stem_overview_drums.clear();
-                    d.stem_overview_bass.clear();
-                    d.stem_overview_melody.clear();
+                    d.stem_overview_vocals.clear();
+                    d.stem_overview_instr.clear();
                     d.stem_hires_drums.clear();
-                    d.stem_hires_bass.clear();
-                    d.stem_hires_melody.clear();
+                    d.stem_hires_vocals.clear();
+                    d.stem_hires_instr.clear();
                     d.samples_per_hires = res.samples_per_hires;
                     d.total_frames = res.total_frames;
                     d.sample_rate = res.sample_rate;
@@ -953,11 +956,11 @@ impl DjApp {
                         s.stems.channels,
                     );
                     d.stem_overview_drums = s.overview_drums;
-                    d.stem_overview_bass = s.overview_bass;
-                    d.stem_overview_melody = s.overview_melody;
+                    d.stem_overview_vocals = s.overview_vocals;
+                    d.stem_overview_instr = s.overview_instr;
                     d.stem_hires_drums = s.hires_drums;
-                    d.stem_hires_bass = s.hires_bass;
-                    d.stem_hires_melody = s.hires_melody;
+                    d.stem_hires_vocals = s.hires_vocals;
+                    d.stem_hires_instr = s.hires_instr;
                     let _ = self.sender.send(DeckCommand::SetStems {
                         deck: s.deck,
                         stems: s.stems,
@@ -1174,6 +1177,16 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
     let title = d.title.as_deref().unwrap_or("(no track)");
     ui.add(egui::Label::new(title).truncate());
 
+    // Stem-separation status. Visible only while a track is loaded
+    // and stems haven't arrived yet (the worker is still grinding
+    // in the background or the demucs subprocess errored).
+    if d.loaded_path.is_some() && !d.telemetry.are_stems_loaded() {
+        ui.colored_label(
+            Color32::from_rgb(200, 160, 70),
+            "🎛 separating stems…",
+        );
+    }
+
     // Transport: Play / CUE / Q / 🔒 / Sync / 🎧.
     ui.horizontal(|ui| {
         let playing = d.telemetry.is_playing();
@@ -1289,26 +1302,27 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
             }
             ui.label(format!("{:.2}", gain));
         });
-        // Right: stem-control column — DRUMS / BASS / MELODY mirroring
-        // the EQ layout. Knobs sit greyed-out until the async stem
-        // worker pushes buffers; dragging is allowed even when greyed
-        // so the user can pre-set gains for an in-progress mix.
+        // Right: stem-control column — DRUMS / VOCALS / INSTR
+        // mirroring the EQ layout. Knobs sit lowercase + ellipsis
+        // until the async stem worker pushes buffers; dragging is
+        // allowed even when separation is in progress so the user
+        // can pre-set gains for an incoming mix.
         let stems_ready = d.telemetry.are_stems_loaded();
         ui.vertical(|ui| {
             let drums_lbl = if stems_ready { "DRUMS" } else { "drums…" };
-            let bass_lbl = if stems_ready { "BASS" } else { "bass…" };
-            let mel_lbl = if stems_ready { "MELODY" } else { "melody…" };
+            let vocals_lbl = if stems_ready { "VOCALS" } else { "vocals…" };
+            let instr_lbl = if stems_ready { "INSTR" } else { "instr…" };
             let cur_drums = d.telemetry.current_stem_drums();
             if let Some(v) = knob(ui, drums_lbl, cur_drums, 0.0..=1.5, KNOB_DIA) {
                 let _ = sender.send(DeckCommand::SetStemDrums { deck, gain: v });
             }
-            let cur_bass = d.telemetry.current_stem_bass();
-            if let Some(v) = knob(ui, bass_lbl, cur_bass, 0.0..=1.5, KNOB_DIA) {
-                let _ = sender.send(DeckCommand::SetStemBass { deck, gain: v });
+            let cur_vocals = d.telemetry.current_stem_vocals();
+            if let Some(v) = knob(ui, vocals_lbl, cur_vocals, 0.0..=1.5, KNOB_DIA) {
+                let _ = sender.send(DeckCommand::SetStemVocals { deck, gain: v });
             }
-            let cur_mel = d.telemetry.current_stem_melody();
-            if let Some(v) = knob(ui, mel_lbl, cur_mel, 0.0..=1.5, KNOB_DIA) {
-                let _ = sender.send(DeckCommand::SetStemMelody { deck, gain: v });
+            let cur_instr = d.telemetry.current_stem_instruments();
+            if let Some(v) = knob(ui, instr_lbl, cur_instr, 0.0..=1.5, KNOB_DIA) {
+                let _ = sender.send(DeckCommand::SetStemInstruments { deck, gain: v });
             }
             // Padding so this column's vertical extent matches the
             // EQ column (VOL fader + value label below).
@@ -1421,17 +1435,17 @@ fn overview_waveform(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sende
     let mid = rect.center().y;
     let cols = w.ceil() as usize;
     let stems_ready = !d.stem_overview_drums.is_empty()
-        && !d.stem_overview_bass.is_empty()
-        && !d.stem_overview_melody.is_empty();
+        && !d.stem_overview_vocals.is_empty()
+        && !d.stem_overview_instr.is_empty();
     if stems_ready {
         // 3-colour overlay: drums (red/orange), bass (blue), melody
         // (yellow-green). Half-alpha so each one is still visible
         // through the others where they peak together.
         draw_stem_columns(&painter, &d.stem_overview_drums, STEM_COLOR_DRUMS,
             rect.left(), mid, h, cols);
-        draw_stem_columns(&painter, &d.stem_overview_bass, STEM_COLOR_BASS,
+        draw_stem_columns(&painter, &d.stem_overview_vocals, STEM_COLOR_VOCALS,
             rect.left(), mid, h, cols);
-        draw_stem_columns(&painter, &d.stem_overview_melody, STEM_COLOR_MELODY,
+        draw_stem_columns(&painter, &d.stem_overview_instr, STEM_COLOR_INSTR,
             rect.left(), mid, h, cols);
     } else {
         let stroke = Stroke::new(1.0, Color32::from_rgb(120, 200, 255));
@@ -1508,13 +1522,13 @@ fn zoom_view(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
         let track_secs = d.total_frames as f64 / d.sample_rate as f64;
         let cols = w.ceil() as usize;
         let stems_ready = !d.stem_hires_drums.is_empty()
-            && !d.stem_hires_bass.is_empty()
-            && !d.stem_hires_melody.is_empty();
+            && !d.stem_hires_vocals.is_empty()
+            && !d.stem_hires_instr.is_empty();
         if stems_ready {
             for (peaks, color) in [
                 (&d.stem_hires_drums, STEM_COLOR_DRUMS),
-                (&d.stem_hires_bass, STEM_COLOR_BASS),
-                (&d.stem_hires_melody, STEM_COLOR_MELODY),
+                (&d.stem_hires_vocals, STEM_COLOR_VOCALS),
+                (&d.stem_hires_instr, STEM_COLOR_INSTR),
             ] {
                 let stroke = Stroke::new(1.0, color);
                 draw_zoom_columns(
