@@ -1239,13 +1239,21 @@ fn zoom_view(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
             let x = t_to_x(t);
             // Use model-derived downbeats when present (v2 cache);
             // fall back to "every 4th beat" for pre-v2 entries that
-            // haven't been re-analysed yet.
-            let is_downbeat = if d.downbeats.is_empty() {
-                i % 4 == 0
+            // haven't been re-analysed yet. Every fourth downbeat
+            // (16 beats / 4 bars) is rendered red — that's a natural
+            // phrase boundary in dance music, where most DJs aim to
+            // start, transition, or drop.
+            let (is_downbeat, is_mix_point) = if d.downbeats.is_empty() {
+                (i % 4 == 0, i % 16 == 0)
             } else {
-                d.downbeats.binary_search(&(i as u32)).is_ok()
+                match d.downbeats.binary_search(&(i as u32)) {
+                    Ok(j) => (true, j % 4 == 0),
+                    Err(_) => (false, false),
+                }
             };
-            let (col, stroke_w) = if is_downbeat {
+            let (col, stroke_w) = if is_mix_point {
+                (Color32::from_rgb(220, 70, 70), 2.0)
+            } else if is_downbeat {
                 (Color32::from_rgb(220, 220, 220), 1.5)
             } else {
                 (Color32::from_gray(90), 0.8)

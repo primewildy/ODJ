@@ -545,9 +545,23 @@ impl Mixer {
                 buffer, analysis, ..
             } => {
                 deck.buffer = Some(buffer);
+                // Snap the playhead + cue point to the first detected
+                // downbeat. Most tracks have a second or three of
+                // silence / room tone before the first kick lands;
+                // dropping it as the natural start means Play / CUE
+                // both behave the way a DJ expects without any manual
+                // seeking. Falls back to t=0 when we don't yet have
+                // downbeats (v1 cache or no model installed).
+                let first_db_sample = analysis
+                    .downbeats
+                    .first()
+                    .and_then(|&i| analysis.beat_grid.get(i as usize).copied())
+                    .map(|t| t * analysis.sample_rate as f64)
+                    .filter(|s| s.is_finite() && *s >= 0.0)
+                    .unwrap_or(0.0);
                 deck.analysis = Some(analysis);
-                deck.playhead = 0.0;
-                deck.cue_frame = 0;
+                deck.playhead = first_db_sample;
+                deck.cue_frame = first_db_sample as u64;
                 deck.in_preview = false;
                 // Keep the deck's play state across a track swap — if the
                 // user was playing and loads a new track, it starts right
