@@ -18,6 +18,8 @@ use std::f32::consts::PI;
 use control::{MusicalKey, TrackBuffer};
 use rustfft::{FftPlanner, num_complex::Complex};
 
+pub mod downbeat;
+
 pub struct AnalysisResult {
     pub bpm: f32,
     /// Beat times in seconds from the start of the track.

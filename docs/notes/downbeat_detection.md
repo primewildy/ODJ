@@ -83,10 +83,51 @@ discrepancy).
 
 ## Integration plan (Rust)
 
-This is what gets built after the spike commits.
+### Status
 
-1. **`crates/analysis`**: add `ort` (ONNX Runtime) + a vendored
-   `model_final0.onnx`. Pipeline:
+- [x] ONNX model bundled — runtime-load from `$XDG_CACHE_HOME/dj/model_final0.onnx`
+  (defaults to `~/.cache/dj/...`). The export script
+  `downbeat-spike/export_onnx.py` produces the file; copy it into the
+  cache path manually for now. Future: auto-download from a hosted URL.
+- [x] `crates/analysis::downbeat` module + `infer_chunk()` wrapping
+  tract-onnx. Smoke test loads + runs.
+- [ ] Log-mel spectrogram matching beat_this' filterbank
+  (slaney scale, frame_length normalised, log1p × 1000).
+- [ ] Chunked inference with `border_size=6` keep-first overlap
+  (port `split_predict_aggregate` from beat_this/inference.py).
+- [ ] Peak picking + global bar offset (port `global_bar_phase.py`).
+- [ ] Schema bump + cache version + UI tweak + re-analysis.
+
+### Why tract-onnx (not ort)
+
+ort 2.0.0-rc.12's download build script broke against newer `ureq`
+(`tls_config` not found). Rather than pin our way around it,
+**tract-onnx** (pure Rust, no native runtime, by Sonos) does the job.
+For a 2 MB-ish model the perf gap is irrelevant — analysis is offline.
+
+### Why runtime-load (not bundled)
+
+The merged-weights ONNX is ~84 MB. Baking that into the binary via
+`include_bytes!` makes every release build a 84 MB blob; committing
+the file inflates git history forever. Cache-on-disk is the cleanest
+tradeoff for a personal project.
+
+### Export quirks
+
+- `torch.onnx.export` with the **default dynamo exporter** produces an
+  ONNX where internal shape constants get baked in even when
+  `dynamic_axes` are set; tract then trips over a static-vs-dynamic
+  shape mismatch on a Permute node. Workaround: export with
+  `dynamo=False` and static (1, 1500, 128) input shape (we always
+  chunk at 1500 anyway).
+- The dynamo exporter also defaults to **external weights** — a
+  `model_final0.onnx.data` sidecar of ~82 MB. We merge them inline via
+  `onnx.save(m, ..., save_as_external_data=False)` so the cache path
+  holds a single self-contained file.
+
+### Pipeline (still to build)
+
+1. **`crates/analysis`**: vendored `model_final0.onnx`. Pipeline:
    - Resample decoded audio to 22050 Hz mono.
    - Log-mel spectrogram (128 mel, 1024 fft, 441 hop = 50 fps,
      fmin=30, fmax=11000). Mel filterbank precomputed at startup.

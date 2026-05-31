@@ -40,6 +40,11 @@ egui_extras = "0.28"
 rustfft = "6"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+# Pure-Rust ONNX inference. Used by the analysis crate for beat_this
+# downbeat inference. We picked tract over `ort` to avoid the native
+# libonnxruntime download (and the periodic breakage from the
+# ort-sys download build script). For a 2 MB model this is fast enough.
+tract-onnx = "0.21"
 
 [profile.dev]
 opt-level = 1

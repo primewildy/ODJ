@@ -6,3 +6,5 @@ version.workspace = true
 [dependencies]
 control = { path = "../control" }
 rustfft = { workspace = true }
+anyhow = { workspace = true }
+tract-onnx = { workspace = true }
