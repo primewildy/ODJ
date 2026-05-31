@@ -67,7 +67,10 @@ enc_screw_d        = 3.2;
 // Stacked above the volume fader. HIGH at top, MID middle, LOW just above the fader.
 pot_bushing_d  = 7.5;       // 7 mm bushing + 0.5 mm clearance
 pot_tab_d      = 3.0;       // 2.7 mm tab + clearance
-pot_tab_offset = 6.6;       // standard tab offset above shaft centre (12 o'clock)
+pot_tab_offset = 8.65;      // tab centre offset from shaft centre (12 o'clock).
+                            // Derived from a measured 4.3 mm shaft-to-tab edge-
+                            // to-edge: 4.3 + 6/2 + 2.7/2 = 8.65. (Standard 9 mm
+                            // Alpha pots are usually 6.6; this one's larger.)
 pot_x          = vol_x;     // aligned with the volume fader
 pot_y_low      = 127;
 pot_y_mid      = 162;
