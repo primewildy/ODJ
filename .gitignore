@@ -43,6 +43,7 @@ controls.toml
 # Rust
 Cargo.lock.bak
 stem-spike/
+downbeat-spike/
 
 # Audio files — never commit (copyright). The music/ library is gitignored
 # above; this catches strays anywhere in the tree (downloaded samples,
