@@ -65,8 +65,23 @@ fi
 # target/release/. When cargo runs the binary, it sets the loader
 # path automatically; when we exec it directly we have to set it
 # ourselves. Use the absolute path so the script works from any cwd.
+#
+# Additionally: pyke's bundled libonnxruntime_providers_cuda.so is
+# built against CUDA 12, but the system has CUDA 13. PyTorch's pip
+# install in stem-spike/venv ships CUDA-12 libs as part of the
+# nvidia-* packages — point the dynamic linker at those so ort's
+# CUDA EP can actually register (otherwise it silently falls back
+# to CPU and stem separation takes ~80 s per 5-min track instead of
+# ~10 s). Listed in the order ort needs to resolve them.
 RELEASE_DIR="$(pwd)/target/release"
-LD_LIBRARY_PATH="${RELEASE_DIR}:${LD_LIBRARY_PATH:-}" "${RELEASE_DIR}/dj" \
+NV_VENV="$(pwd)/stem-spike/venv/lib/python3.14/site-packages/nvidia"
+CUDA_LIBS=""
+if [[ -d "$NV_VENV" ]]; then
+    for sub in cublas cuda_runtime cudnn cufft curand cusolver cusparse nvjitlink nvtx; do
+        [[ -d "$NV_VENV/$sub/lib" ]] && CUDA_LIBS="${CUDA_LIBS}${NV_VENV}/${sub}/lib:"
+    done
+fi
+LD_LIBRARY_PATH="${RELEASE_DIR}:${CUDA_LIBS}${LD_LIBRARY_PATH:-}" "${RELEASE_DIR}/dj" \
     --cue-device "KT USB Audio" \
     --midi "ODJ" \
     "$@" &
