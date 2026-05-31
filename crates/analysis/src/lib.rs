@@ -278,9 +278,23 @@ pub fn analyse(buf: &TrackBuffer) -> AnalysisResult {
     // 7. Beat times in seconds.
     let frame_to_secs = 1.0 / frame_rate as f64;
     let track_secs = mono.len() as f64 / actual_rate as f64;
-    let mut beats = Vec::<f64>::new();
-    let mut t = best_offset as f64 * frame_to_secs;
     let dt = period as f64 * frame_to_secs;
+    let mut t = best_offset as f64 * frame_to_secs;
+    // The phase search sometimes lands one beat late — best_offset
+    // ends up >90 % of a period, with the *actual* first onset sitting
+    // at t ≈ 0 that the algorithm missed (FFT / detrending boundary
+    // effects make env at t≈0 less reliable than mid-track). When
+    // that happens, step back so beat[0] anchors at the real first
+    // onset. We only step when t-dt is within 10 % of zero, so this
+    // never adds spurious beats on tracks where the DSP correctly
+    // identified a small positive best_offset (Moonlight, AWTF, etc).
+    if t - dt > -dt * 0.1 {
+        t -= dt;
+        if t < 0.0 {
+            t = 0.0;
+        }
+    }
+    let mut beats = Vec::<f64>::new();
     while t <= track_secs {
         if t >= 0.0 {
             beats.push(t);
