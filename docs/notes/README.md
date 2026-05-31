@@ -25,3 +25,4 @@ you want the rationale behind a specific decision.
 - [cue_routing.md](cue_routing.md) — dual-output cue bus + drift trade-off
 - [hardware_bringup.md](hardware_bringup.md) — RP2040 wiring gotchas + lessons
 - [pipewire_routing.md](pipewire_routing.md) — cue stream routing on PipeWire, gotchas + `start-dj.sh`
+- [stem_separation.md](stem_separation.md) — model spike + decision: HTDemucs 4-stem, exposed as 3 controls per deck

@@ -69,9 +69,18 @@ priority order within each section.
 - [ ] **Master crossfader.** Currently per-deck gain serves as a manual
   crossfade. A real X-fader would be a single -1..+1 control modulating
   both gains in opposite directions with a configurable curve.
-- [ ] **Stem-based mixing.** Pre-compute Demucs / hybrid-demucs stems
-  per track on the worker thread, cache them, render with per-stem gain
-  controls (kill the kick from one deck while letting another's play).
+- [ ] **Stem-based mixing.** Spiked 2026-05-31 (see
+  `docs/notes/stem_separation.md`). Decision: **HTDemucs 4-stem**
+  pre-computed in the background analysis worker (~15 s/track on GPU),
+  cached on disk as FLAC. UI exposes **3 controls per deck**: drums,
+  bass, and a combined "melody" (vocals + other summed at playback).
+  Source on disk stays 4-stem so future UI changes don't require
+  re-running separation. Integration sketch:
+  (1) analysis worker shells out to `demucs` when stems aren't cached;
+  (2) `decode` crate grows TrackBuffer from 1 to 4 stereo buffers;
+  (3) `audio::Mixer` adds per-deck `gain_drums/bass/melody` atomics;
+  (4) `control` adds 3 new `SetStem*` DeckCommands;
+  (5) `ui` adds 3 mini-faders per deck panel.
 - [ ] **Loop control.** 4/8/16-beat loops mapped to pads. Engine support
   is a small addition to the render loop.
 - [ ] **Hot cues.** Multiple stored cue points per track, mapped to
