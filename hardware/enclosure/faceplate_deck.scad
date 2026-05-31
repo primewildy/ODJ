@@ -43,14 +43,21 @@ vol_x    = pitch_x + fader_spacing;
 vol_cy   = 62;              // lower (EQ pots stack above)
 
 // ===== Rotary encoder (jog) — between the two faders =====
-// User-supplied: 6 mm shaft, 3 × M3 mount screws around the shaft.
-// "26 mm between mount holes" interpreted as the chord between two adjacent
-// holes → mounting pitch-circle diameter ≈ chord × 2/√3 ≈ 30 mm.
-// If your encoder's datasheet gives the PCD (mounting circle diameter)
-// directly as 26 mm instead, set enc_mount_pcd = 26.
+// 6 mm shaft sticking out of a 20 mm flange/collar, body behind the panel,
+// 3 × M3 mount screws around the shaft on a 30 mm PCD. The central cutout
+// has to clear the flange (20 mm), not just the bare shaft, or the encoder
+// won't seat flush against the panel.
+//
+// "26 mm between mount holes" was interpreted as the chord between two
+// adjacent holes → PCD ≈ chord × 2/√3 ≈ 30 mm. If your encoder's
+// datasheet gives the PCD directly as 26 mm, set enc_mount_pcd = 26.
 enc_x              = (pitch_x + vol_x) / 2;
 enc_y              = 152;     // upper-middle (visually central)
-enc_shaft_d        = 7;       // 6 mm shaft + 1 mm clearance
+enc_flange_d       = 20;      // central clearance hole — the encoder's
+                              // flange/collar sits in this hole; the 6 mm
+                              // shaft passes through the same opening
+                              // (set this to ~7 mm if your encoder has
+                              // a bare shaft with no flange)
 enc_mount_count    = 3;       // number of M3 mount screws around the shaft
 enc_mount_pcd      = 30;      // mounting pitch-circle diameter (mm)
 enc_mount_rotation = 90;      // degrees — 90 = first hole at 12 o'clock
@@ -97,7 +104,7 @@ module rotary_pot(cx, cy) {
 }
 
 module encoder(cx, cy) {
-    translate([cx, cy]) circle(d=enc_shaft_d, $fn=40);
+    translate([cx, cy]) circle(d=enc_flange_d, $fn=48);
     r = enc_mount_pcd / 2;
     for (i = [0 : enc_mount_count - 1])
         let (a = enc_mount_rotation + i * 360 / enc_mount_count)
