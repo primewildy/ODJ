@@ -737,24 +737,48 @@ impl eframe::App for DjApp {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let avail = ui.available_height();
-            let half = (avail - 12.0) * 0.5;
-            ui.allocate_ui_with_layout(
-                Vec2::new(ui.available_width(), half),
-                egui::Layout::top_down(egui::Align::LEFT),
-                |ui| deck_panel(ui, DeckId::A, &mut self.deck_a, &self.sender),
-            );
+            // Top: waveforms stacked so the two zoom (beat-grid) views sit
+            // back-to-back — eyeballing two decks' beat positions next to
+            // each other is the whole point of this layout.
+            //
+            //   [Deck A overview ]
+            //   [Deck A zoom     ]   ← beat grids adjacent
+            //   [Deck B zoom     ]   ←
+            //   [Deck B overview ]
+            overview_waveform(ui, &self.deck_a, DeckId::A, &self.sender);
+            zoom_view(ui, &self.deck_a, DeckId::A, &self.sender);
+            zoom_view(ui, &self.deck_b, DeckId::B, &self.sender);
+            overview_waveform(ui, &self.deck_b, DeckId::B, &self.sender);
+
             ui.separator();
-            ui.allocate_ui_with_layout(
-                Vec2::new(ui.available_width(), half),
-                egui::Layout::top_down(egui::Align::LEFT),
-                |ui| deck_panel(ui, DeckId::B, &mut self.deck_b, &self.sender),
-            );
+
+            // Bottom: controls in mixer-style columns — Deck A on the
+            // left, Deck B on the right. Each column gets its own deck
+            // header + transport + pitch/vol + EQ.
+            let col_w = (ui.available_width() - 12.0) * 0.5;
+            let col_h = ui.available_height();
+            ui.horizontal(|ui| {
+                ui.allocate_ui_with_layout(
+                    Vec2::new(col_w, col_h),
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| deck_controls(ui, DeckId::A, &mut self.deck_a, &self.sender),
+                );
+                ui.separator();
+                ui.allocate_ui_with_layout(
+                    Vec2::new(col_w, col_h),
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| deck_controls(ui, DeckId::B, &mut self.deck_b, &self.sender),
+                );
+            });
         });
     }
 }
 
-fn deck_panel(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sender) {
+/// Renders a deck's header (label + track title + BPM + key) followed by
+/// the transport / pitch / vol / EQ rows. Waveforms live above this in the
+/// central panel so the two decks' beat grids sit visually adjacent — see
+/// the CentralPanel block in `App::update`.
+fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sender) {
     let label = match deck {
         DeckId::A => "Deck A",
         DeckId::B => "Deck B",
@@ -785,9 +809,6 @@ fn deck_panel(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sender) 
         };
         ui.label(key_str);
     });
-
-    overview_waveform(ui, d, deck, sender);
-    zoom_view(ui, d, deck, sender);
 
     ui.horizontal(|ui| {
         let playing = d.telemetry.is_playing();
