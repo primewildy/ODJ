@@ -36,6 +36,19 @@ Built features:
 - Per-deck play-envelope (5 ms fade) — no click on transitions.
 - BPM + beat-grid analysis (pure-Rust spectral flux + autocorr + brute
   force phase-aligned refinement, ~0.05 BPM precision).
+- Downbeat detection via [beat_this](https://github.com/CPJKU/beat_this)
+  exported to ONNX and run in-process from Rust via `ort` (CUDA EP).
+  Red 4-bar lines on the beat grid; auto-snap of the playhead and cue
+  point to the first downbeat on load. Optional — falls back to
+  `i%4==0` if the ONNX file isn't present.
+- **Live stem separation** via HTDemucs (
+  [MansfieldPlumbing/Demucs_v4_TRT](https://huggingface.co/MansfieldPlumbing/Demucs_v4_TRT)
+  ONNX) on the GPU through `ort` + TensorRT + FP16. ~7 s/track on an
+  RTX 4060 Laptop. Three per-deck rotary knobs (DRUMS / VOCALS /
+  INSTRUMENTS), 3-colour overlayed stem waveforms, in-memory
+  session cache (not persisted to disk — too big). Tracks load and
+  play immediately; the mixer transparently switches from the single
+  buffer to the 4-stem mix when the worker finishes.
 - Musical key detection (Krumhansl-Schmuckler) in Camelot notation.
 - Auto Sync (BPM match) + auto Beat Align (phase-snap on play start).
 - Pioneer-style CUE state machine including the "Cue Play" commit.
@@ -55,6 +68,64 @@ Built features:
 
 See [DESIGN.md](./DESIGN.md) for architecture and [TODO.md](./TODO.md) for
 roadmap.
+
+## Setup
+
+Beyond `cargo` + the system audio stack, two of the bigger features need
+out-of-band model files. The app runs fine without either — they're
+gracefully optional — but you'll be missing red downbeat lines and stem
+controls until they're in place.
+
+All caches live under `~/.cache/dj/` (override with `$XDG_CACHE_HOME`).
+
+### Models — runtime cache layout
+
+| Path | What it is | Size | How to get it |
+|---|---|---|---|
+| `~/.cache/dj/model_final0.onnx` | beat_this downbeat model | ~85 MB | run [`scripts/export_beat_this_onnx.py`](./scripts/export_beat_this_onnx.py) in a Python venv that has `beat_this` installed, then `cp model_final0.onnx ~/.cache/dj/` |
+| `~/.cache/dj/htdemucs.onnx` | HTDemucs stem-separation model | 246 MB | `curl -L -o ~/.cache/dj/htdemucs.onnx https://huggingface.co/MansfieldPlumbing/Demucs_v4_TRT/resolve/main/demucsv4.onnx` |
+| `~/.cache/dj/trt-engines/` | TensorRT engine cache | ~190 MB after first build | created automatically on first stem separation (~15 min compile, cached after) |
+
+Both files are runtime-loaded; nothing is bundled into the binary.
+
+### TensorRT — for the fast stem path
+
+The stems crate uses `ort`'s TensorRT execution provider. That needs
+TensorRT 10.x libs (`libnvinfer.so.10`, `libnvinfer_plugin.so.10`,
+`libnvonnxparser.so.10`) discoverable on `LD_LIBRARY_PATH`. The
+easiest way: extract them from PyPI's `tensorrt-cu12-libs` wheel:
+
+```sh
+curl -L -o /tmp/trt.whl \
+    https://pypi.nvidia.com/tensorrt-cu12-libs/tensorrt_cu12_libs-10.16.1.11-py3-none-manylinux_2_28_x86_64.whl
+mkdir -p stem-spike/trt-libs && unzip -q /tmp/trt.whl -d stem-spike/trt-libs
+```
+
+`start-dj.sh` picks them up from `stem-spike/trt-libs/tensorrt_libs/`
+automatically.
+
+### CUDA — what ort needs at runtime
+
+`ort` ships against CUDA 12 but ships a CUDA EP that's flexible.
+On Arch with system CUDA 13.2 you can either:
+- Install CUDA 12 alongside (e.g. via the matching `cuda-12.x` AUR
+  package), or
+- Use PyTorch's bundled CUDA-12 libs from a venv (set up via either
+  spike script; PyTorch pulls them as `nvidia-*` packages).
+
+`start-dj.sh` auto-prepends `stem-spike/venv/lib/python*/site-packages/nvidia/*/lib/`
+to `LD_LIBRARY_PATH` if it exists, so the venv path "just works".
+
+If neither is in place, `ort` silently falls back to CPU (stems take
+~80 s/track instead of ~7 s; downbeat detection still works in
+seconds).
+
+### Music
+
+`--music-dir music` by default (relative to CWD). Drop your library
+in there; first launch pre-analyses every track in the background
+(BPM, beat grid, downbeats, key) and caches results to
+`<music-dir>/.analysis-cache`.
 
 ## Running
 
