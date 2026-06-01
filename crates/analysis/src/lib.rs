@@ -51,6 +51,77 @@ const MIN_BPM: f32 = 60.0;
 const MAX_BPM: f32 = 200.0;
 const N_PHASES: usize = 32;
 
+/// Second-pass refinement using the isolated drum stem. The initial
+/// `analyse` runs on the full mix where the kick is often masked by
+/// other elements, so beats land near — but not exactly on — the
+/// kick. With drums isolated, every kick is a clean transient. For
+/// each beat in `beat_grid`, search a ±`window_ms` window in the drum
+/// stem and snap the beat to the local energy peak. Preserves grid
+/// length and ordering (returns a parallel Vec<f64>).
+///
+/// Looks for the *peak* amplitude inside the window rather than the
+/// onset edge — perceptually the "boom" of the kick centres there
+/// for sub-heavy electronic kicks, and using a wider window matches
+/// what the user hears when tracks are layered.
+pub fn snap_beats_to_drum_peaks(
+    drums: &[f32],
+    channels: u16,
+    sample_rate: u32,
+    beat_grid: &[f64],
+    window_ms: f32,
+) -> Vec<f64> {
+    let ch = channels.max(1) as usize;
+    let total_frames = drums.len() / ch;
+    if total_frames == 0 || beat_grid.is_empty() {
+        return beat_grid.to_vec();
+    }
+    // Quick mono-summed |amplitude| with a tiny smoothing window so
+    // we lock onto the energy lobe of each kick rather than a single
+    // transient sample. ~2 ms at 44.1 kHz ≈ 88 samples.
+    let smooth = ((sample_rate as f32 * 0.002) as usize).max(1);
+    let mut env = vec![0.0f32; total_frames];
+    let mut acc = 0.0f32;
+    let mut head = 0usize;
+    for i in 0..total_frames {
+        let mut s = 0.0f32;
+        for c in 0..ch { s += drums[i * ch + c].abs(); }
+        acc += s;
+        if i >= smooth {
+            let old = {
+                let mut o = 0.0f32;
+                for c in 0..ch { o += drums[head * ch + c].abs(); }
+                o
+            };
+            acc -= old;
+            head += 1;
+        }
+        env[i] = acc / smooth as f32;
+    }
+    let half = (sample_rate as f32 * window_ms / 1000.0) as usize;
+    beat_grid
+        .iter()
+        .map(|&t| {
+            let center = (t * sample_rate as f64) as i64;
+            let lo = (center - half as i64).max(0) as usize;
+            let hi = ((center + half as i64) as usize).min(total_frames);
+            if lo >= hi { return t; }
+            let mut best_i = lo;
+            let mut best_v = -1.0f32;
+            for i in lo..hi {
+                if env[i] > best_v {
+                    best_v = env[i];
+                    best_i = i;
+                }
+            }
+            // Only accept the snap if there's actual energy in the
+            // window — silent regions or breakdowns leave the grid
+            // unmodified rather than drifting onto noise.
+            if best_v < 1e-4 { return t; }
+            best_i as f64 / sample_rate as f64
+        })
+        .collect()
+}
+
 pub fn analyse(buf: &TrackBuffer) -> AnalysisResult {
     let sr = buf.sample_rate;
     let ch = buf.channels.max(1) as usize;

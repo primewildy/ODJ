@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender as StdSender, channel};
 
 use audio::{DeckTelemetry, Engine, Sender};
-use control::{DeckCommand, DeckId, MusicalKey, TrackBuffer};
+use control::{DeckCommand, DeckId, MusicalKey, TrackAnalysis, TrackBuffer};
 use eframe::egui;
 use egui::{Color32, Pos2, Sense, Stroke, Vec2};
 use persistence::{AnalysisCache, CachedAnalysis, Favourites};
@@ -857,6 +857,51 @@ impl DjApp {
                     d.stem_hires_drums = s.hires_drums;
                     d.stem_hires_vocals = s.hires_vocals;
                     d.stem_hires_instr = s.hires_instr;
+                    // Second-pass beat refinement: now that the drum
+                    // stem is isolated, snap each beat from the noisy
+                    // full-mix detection to the actual kick peak. Only
+                    // refine if we already have a beat grid (skipped
+                    // for tracks whose initial analysis is still in
+                    // flight — the slow path will produce the grid
+                    // and `LoadEvent::Refined` will trigger a follow-
+                    // up snap then).
+                    if !d.beat_grid.is_empty() {
+                        let before = d.beat_grid.clone();
+                        d.beat_grid = analysis::snap_beats_to_drum_peaks(
+                            &s.stems.drums,
+                            s.stems.channels,
+                            s.stems.sample_rate,
+                            &d.beat_grid,
+                            40.0,
+                        );
+                        let max_shift_ms = d.beat_grid
+                            .iter()
+                            .zip(before.iter())
+                            .map(|(a, b)| ((a - b).abs() * 1000.0) as i32)
+                            .max()
+                            .unwrap_or(0);
+                        eprintln!(
+                            "stems: kick-snap refined {} beats (max shift {} ms)",
+                            d.beat_grid.len(),
+                            max_shift_ms
+                        );
+                        // Push refined grid to the audio engine so
+                        // Sync / Beat Align use the new alignment.
+                        let analysis = Arc::new(TrackAnalysis {
+                            analysis_version: 2,
+                            bpm: d.bpm,
+                            beat_grid: d.beat_grid.clone(),
+                            downbeats: d.downbeats.clone(),
+                            duration_secs: d.total_frames as f64 / d.sample_rate.max(1) as f64,
+                            sample_rate: d.sample_rate,
+                            key: d.key,
+                        });
+                        let _ = self.sender.send(DeckCommand::UpdateAnalysis {
+                            deck: s.deck,
+                            analysis,
+                        });
+                        meta_changed = true;
+                    }
                     let _ = self.sender.send(DeckCommand::SetStems {
                         deck: s.deck,
                         stems: s.stems,
