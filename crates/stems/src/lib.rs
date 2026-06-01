@@ -97,40 +97,66 @@ fn model() -> Result<&'static Plan> {
     Ok(MODEL.get_or_init(|| session))
 }
 
+/// Overlap-add stride: chunks step forward by this many samples
+/// (rather than the full chunk length). The model produces a CHUNK
+/// of output centred on each step, the OVERLAP regions on either
+/// side get blended into the neighbour. demucs uses ~1 s of overlap
+/// each side; we use 22050 samples = 0.5 s as a compromise (cheaper,
+/// fewer inferences, still kills the boundary artefacts).
+const OVERLAP: usize = 22_050; // 0.5 s
+const STRIDE: usize = MODEL_CHUNK - 2 * OVERLAP; // 299,880
+
 fn run_htdemucs(input_path: &Path) -> Result<TrackStems> {
     let buf = decode::load_to_buffer(input_path)?;
-    // Demucs operates on 44.1 kHz stereo. Resample / channel-fix as needed.
     let audio = prepare_audio_for_model(&buf);
     let n_frames = audio.len() / 2;
 
     let session = model()?;
     let t0 = std::time::Instant::now();
 
-    // Per-chunk processing: pad to a multiple of MODEL_CHUNK, run
-    // each chunk through the model, stitch outputs. No overlap-add
-    // for v1 — slight artefacts at chunk boundaries, fix later.
-    let n_chunks = n_frames.div_ceil(MODEL_CHUNK);
-    let padded_len = n_chunks * MODEL_CHUNK;
+    // Overlap-add layout. Each chunk is centred on a STRIDE-aligned
+    // origin, padded with OVERLAP on each side. Output is summed into
+    // the corresponding `n_frames + OVERLAP` slice via a triangular
+    // window so adjacent chunks crossfade in the OVERLAP regions.
+    // This matches demucs.apply.apply_model's behaviour and eliminates
+    // the "click every 7.8 s" artefact we had with hard cuts.
+    let n_chunks = (n_frames + STRIDE - 1) / STRIDE;
+    let mut drums = vec![0.0_f32; n_frames * 2];
+    let mut bass = vec![0.0_f32; n_frames * 2];
+    let mut other = vec![0.0_f32; n_frames * 2];
+    let mut vocals = vec![0.0_f32; n_frames * 2];
+    // Per-sample weight sum — divide once at the end to normalise.
+    let mut weight_sum = vec![0.0_f32; n_frames];
 
-    // Output buffers per stem, sized to the FULL padded length (we'll
-    // truncate to n_frames at the end). Each holds interleaved stereo.
-    let mut drums = vec![0.0_f32; padded_len * 2];
-    let mut bass = vec![0.0_f32; padded_len * 2];
-    let mut other = vec![0.0_f32; padded_len * 2];
-    let mut vocals = vec![0.0_f32; padded_len * 2];
+    // Pre-build the triangular window: ramps up over OVERLAP, plateaus
+    // for STRIDE, ramps down over OVERLAP.
+    let mut window = vec![0.0_f32; MODEL_CHUNK];
+    for i in 0..OVERLAP {
+        let w = (i + 1) as f32 / OVERLAP as f32;
+        window[i] = w;
+        window[MODEL_CHUNK - 1 - i] = w;
+    }
+    for i in OVERLAP..MODEL_CHUNK - OVERLAP {
+        window[i] = 1.0;
+    }
 
-    // De-interleaved chunk buffer reused per inference call.
     let mut chunk_in = vec![0.0_f32; 2 * MODEL_CHUNK];
-
+    let mut t_prep = std::time::Duration::ZERO;
+    let mut t_run = std::time::Duration::ZERO;
+    let mut t_extract = std::time::Duration::ZERO;
     for ci in 0..n_chunks {
-        let src_start = ci * MODEL_CHUNK;
-        // Build (1, 2, MODEL_CHUNK) — channels-first, contiguous.
+        // Chunk centre in samples; the actual chunk reads OVERLAP
+        // samples before and (MODEL_CHUNK - OVERLAP) after.
+        let centre = (ci * STRIDE) as isize;
+        let start = centre - OVERLAP as isize;
+        let tp = std::time::Instant::now();
         chunk_in.fill(0.0);
         for i in 0..MODEL_CHUNK {
-            let src_i = src_start + i;
-            if src_i < n_frames {
-                chunk_in[i] = audio[src_i * 2];                  // left
-                chunk_in[MODEL_CHUNK + i] = audio[src_i * 2 + 1]; // right
+            let src_i = start + i as isize;
+            if src_i >= 0 && (src_i as usize) < n_frames {
+                let si = src_i as usize;
+                chunk_in[i] = audio[si * 2];
+                chunk_in[MODEL_CHUNK + i] = audio[si * 2 + 1];
             }
         }
         let input = Array4::from_shape_vec(
@@ -138,13 +164,16 @@ fn run_htdemucs(input_path: &Path) -> Result<TrackStems> {
             chunk_in.clone(),
         )?
         .into_shape_with_order((1, 2, MODEL_CHUNK))?;
+        t_prep += tp.elapsed();
 
+        let tr = std::time::Instant::now();
         let outputs = session
             .run(ort::inputs!["audio" => Tensor::from_array(input)?]?)?;
+        t_run += tr.elapsed();
+
+        let te = std::time::Instant::now();
         let stems_out = outputs["stems"].try_extract_tensor::<f32>()?;
-        // Shape (1, 4, 2, MODEL_CHUNK) — drums, bass, other, vocals.
         let slice = stems_out.as_slice().context("stems output not contiguous")?;
-        // Interleave each stem into its output buffer.
         for (stem_idx, out_buf) in [
             (0usize, &mut drums),
             (1, &mut bass),
@@ -153,26 +182,44 @@ fn run_htdemucs(input_path: &Path) -> Result<TrackStems> {
         ] {
             let base = stem_idx * 2 * MODEL_CHUNK;
             for i in 0..MODEL_CHUNK {
-                let dst = (src_start + i) * 2;
-                if dst + 1 < out_buf.len() {
-                    out_buf[dst] = slice[base + i];
-                    out_buf[dst + 1] = slice[base + MODEL_CHUNK + i];
+                let dst_i = start + i as isize;
+                if dst_i < 0 || (dst_i as usize) >= n_frames {
+                    continue;
                 }
+                let dst = dst_i as usize * 2;
+                let w = window[i];
+                out_buf[dst] += slice[base + i] * w;
+                out_buf[dst + 1] += slice[base + MODEL_CHUNK + i] * w;
             }
+        }
+        // Accumulate weight only on the first stem pass; same for all 4.
+        for i in 0..MODEL_CHUNK {
+            let dst_i = start + i as isize;
+            if dst_i < 0 || (dst_i as usize) >= n_frames {
+                continue;
+            }
+            weight_sum[dst_i as usize] += window[i];
+        }
+        t_extract += te.elapsed();
+    }
+
+    // Normalise — divide accumulated weighted sums by the window sum.
+    for f in 0..n_frames {
+        let w = weight_sum[f].max(1e-6);
+        for buf in [&mut drums, &mut bass, &mut other, &mut vocals] {
+            buf[f * 2] /= w;
+            buf[f * 2 + 1] /= w;
         }
     }
 
-    // Truncate to the original frame count.
-    drums.truncate(n_frames * 2);
-    bass.truncate(n_frames * 2);
-    other.truncate(n_frames * 2);
-    vocals.truncate(n_frames * 2);
-
     eprintln!(
-        "stems: {} chunks ({} s) in {:.1}s",
+        "stems: {} chunks ({:.1} s) in {:.1}s — per-chunk avg: prep {:.0} ms, run {:.0} ms, extract {:.0} ms",
         n_chunks,
         n_frames as f32 / MODEL_SR as f32,
-        t0.elapsed().as_secs_f32()
+        t0.elapsed().as_secs_f32(),
+        t_prep.as_secs_f32() * 1000.0 / n_chunks as f32,
+        t_run.as_secs_f32() * 1000.0 / n_chunks as f32,
+        t_extract.as_secs_f32() * 1000.0 / n_chunks as f32,
     );
 
     Ok(TrackStems {
