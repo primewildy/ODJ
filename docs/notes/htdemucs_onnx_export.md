@@ -75,18 +75,57 @@ The bare ONNX is 2.3 MB header + 168 MB `.data` sidecar. Inlined
 to a single file: 171 MB. Bigger than beat_this (85 MB) but
 manageable as a cached download.
 
-## Next steps (still on this branch)
+## What landed on main
 
-1. Move the inlined `htdemucs.onnx` to `~/.cache/dj/htdemucs.onnx`.
-2. Port `crates/stems` to use `ort` instead of the Python subprocess:
-   - Load the model once via `OnceLock<Session>` (same pattern as
-     `crates/analysis::downbeat::model()`).
-   - Resample input to 44.1 kHz stereo if needed.
-   - Chunk into 7.8 s segments; demucs.apply uses an overlap-add
-     wrapper with ~3 s border per side at training time. For a
-     first pass we can use non-overlapping chunks and accept slight
-     edge artefacts, then come back for overlap-add later.
-3. Drop the Python venv / subprocess dependency from `start-dj.sh`.
+The hand-rolled ONNX above ended up superseded — we found two upstream
+projects that had already done the hard work better:
+
+1. **[MansfieldPlumbing/Demucs_v4_TRT](https://huggingface.co/MansfieldPlumbing/Demucs_v4_TRT)**
+   on HuggingFace published a `demucsv4.onnx` that *internalises* the
+   STFT via a `WaveformOnlyWrapper` so TensorRT can fuse FFT kernels
+   with surrounding convs. Output is 6 stems (drums / bass / other /
+   vocals / guitar / piano).
+
+2. **[Mixxx GSoC 2025](https://mixxx.org/news/2025-10-27-gsoc2025-demucs-to-onnx-dhunstack/)**
+   independently solved the same export blockers via the same approach.
+
+`crates/stems` now uses MansfieldPlumbing's ONNX with ort's
+`TensorRTExecutionProvider` and FP16. Guitar + piano outputs get
+folded into "other" so the UI's INSTRUMENTS knob (which is
+gain × (bass + other) in the audio engine) covers everything that
+isn't drums or vocals.
+
+## Final perf
+
+RTX 4060 Laptop (sm89), 5-min track, 44 overlap-added chunks:
+
+| Setup                                  | Per-chunk | End-to-end |
+|----------------------------------------|----------:|-----------:|
+| tract-onnx (pure-Rust CPU)             | ~85 s     | ~30 min    |
+| ort CUDA EP, hand-rolled ONNX (fp32)   | 1201 ms   | 53 s       |
+| ort TensorRT EP, MansfieldPlumbing ONNX (fp16) | **55 ms** | **7.5 s** |
+| Python demucs (PyTorch + CUDA)         | 80 ms     | ~13 s      |
+
+VRAM dropped from ~7 GB on CUDA EP to ~2 GB on TRT — the engine is
+much more memory-efficient than ort's BFC arena.
+
+## Setup
+
+Three artefacts have to be in place at runtime:
+
+1. `~/.cache/dj/htdemucs.onnx` — download from MansfieldPlumbing's
+   HF repo (246 MB).
+2. `~/.cache/dj/trt-engines/` — engine cache dir. First run compiles
+   into a ~186 MB engine file (~15 min on the 4060); subsequent
+   runs load it instantly.
+3. TensorRT 10.x libs on `LD_LIBRARY_PATH`. We extract from the
+   `tensorrt-cu12-libs` PyPI wheel into
+   `stem-spike/trt-libs/tensorrt_libs/`; `start-dj.sh` adds that
+   to the path.
+
+FP16 occasionally emits inf / NaN samples; the chunk extractor in
+`crates/stems/src/lib.rs` clamps to [-4, 4] and zeros non-finite
+values before accumulating into the per-stem output.
 
 ## See also
 
