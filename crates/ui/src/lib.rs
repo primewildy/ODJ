@@ -1752,10 +1752,13 @@ fn overview_waveform(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sende
         }
     }
 
-    // Loop region overlay + IN marker. The fill only appears once
-    // OUT is set, but the IN tick mark appears as soon as IN is
-    // pressed so you can see where it landed.
-    if let Some((in_f, out_f)) = d.telemetry.loop_range() {
+    // Loop region overlay. Three states matching the zoom view:
+    //   - IN + OUT  → bright committed-loop fill.
+    //   - IN only   → dim "recording" fill from IN to the playhead.
+    //   - neither   → nothing.
+    let loop_in = d.telemetry.loop_in_frame();
+    let loop_range = d.telemetry.loop_range();
+    if let Some((in_f, out_f)) = loop_range {
         let in_frac = (in_f as f32 / d.total_frames.max(1) as f32).clamp(0.0, 1.0);
         let out_frac = (out_f as f32 / d.total_frames.max(1) as f32).clamp(0.0, 1.0);
         if out_frac > in_frac {
@@ -1770,8 +1773,23 @@ fn overview_waveform(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sende
                 Color32::from_rgba_premultiplied(120, 100, 20, 90),
             );
         }
+    } else if let Some(in_f) = loop_in {
+        let in_frac = (in_f as f32 / d.total_frames.max(1) as f32).clamp(0.0, 1.0);
+        let head_frac = (d.telemetry.playhead_frames() as f32 / d.total_frames.max(1) as f32).clamp(0.0, 1.0);
+        if head_frac > in_frac {
+            let x0 = rect.left() + in_frac * w;
+            let x1 = (rect.left() + head_frac * w).max(x0 + 1.0);
+            let region = egui::Rect::from_min_max(
+                Pos2::new(x0, rect.top()),
+                Pos2::new(x1, rect.bottom()),
+            );
+            painter.rect_filled(
+                region, 0.0,
+                Color32::from_rgba_premultiplied(80, 65, 12, 60),
+            );
+        }
     }
-    if let Some(in_f) = d.telemetry.loop_in_frame() {
+    if let Some(in_f) = loop_in {
         let frac = (in_f as f32 / d.total_frames.max(1) as f32).clamp(0.0, 1.0);
         let x = rect.left() + frac * w;
         painter.line_segment(
@@ -1886,15 +1904,17 @@ fn zoom_view(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
 
     // Loop region highlight + bound markers. Painted *behind* the
     // beat grid so the grid stays readable. Three states:
-    //  - IN only      → yellow vertical bar at IN (so you can see it
-    //                   landed before you press OUT).
-    //  - IN + OUT     → translucent fill across the span + bars at
-    //                   both bounds.
-    //  - neither      → nothing.
+    //  - IN only          → dim "recording" fill from IN to the
+    //                       current playhead (grows in real time so
+    //                       you can see how long the loop will be).
+    //  - IN + OUT         → brighter committed-loop fill across the
+    //                       full span + bar at OUT.
+    //  - neither          → nothing.
     if d.sample_rate > 0 {
         let in_t = d.telemetry.loop_in_frame().map(|f| f as f64 / d.sample_rate as f64);
         let range = d.telemetry.loop_range();
         if let Some((in_f, out_f)) = range {
+            // Committed loop — both bounds set.
             let in_t = in_f as f64 / d.sample_rate as f64;
             let out_t = out_f as f64 / d.sample_rate as f64;
             if out_t > view_start && in_t < view_end {
@@ -1918,9 +1938,29 @@ fn zoom_view(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
                     );
                 }
             }
+        } else if let Some(in_t) = in_t {
+            // "Recording" state — IN set, OUT pending. Fill from IN to
+            // the playhead so the user sees the candidate loop length
+            // grow in real time. Dimmer + cooler tint than the
+            // committed loop so the two states are distinct.
+            let end_t = playhead_t.max(in_t);
+            if end_t > view_start && in_t < view_end {
+                let x0 = t_to_x(in_t.max(view_start));
+                let x1 = t_to_x(end_t.min(view_end));
+                if x1 > x0 {
+                    let region = egui::Rect::from_min_max(
+                        Pos2::new(x0, rect.top()),
+                        Pos2::new(x1, rect.bottom()),
+                    );
+                    painter.rect_filled(
+                        region, 0.0,
+                        Color32::from_rgba_premultiplied(40, 35, 8, 50),
+                    );
+                }
+            }
         }
-        // IN marker — drawn for both states so user gets immediate
-        // feedback after pressing IN, before pressing OUT.
+        // IN marker — drawn in all states so the start of the loop is
+        // always clearly visible.
         if let Some(in_t) = in_t {
             if in_t >= view_start && in_t <= view_end {
                 let x = t_to_x(in_t);
