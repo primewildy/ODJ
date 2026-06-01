@@ -51,104 +51,176 @@ const MIN_BPM: f32 = 60.0;
 const MAX_BPM: f32 = 200.0;
 const N_PHASES: usize = 32;
 
-/// Single-offset grid refinement using the isolated drum stem.
+/// Single-offset grid phase refinement using the isolated drum stem.
 ///
-/// The initial `analyse` gets the tempo + spacing right (dance music
-/// is metronomically steady — per-beat snapping would only introduce
-/// noise) but the *phase* can drift a few tens of ms because the
-/// kick is masked by other elements in the full mix. With drums
-/// isolated, every kick has a clean rising edge. We:
+/// The full-mix `analyse` gets tempo + spacing right (rock-solid in
+/// dance music — per-beat snapping would only add noise) but the
+/// grid's phase can drift a few tens of ms because the kick is
+/// masked. With drums isolated we apply a single global shift so
+/// every beat sits at a consistent physical landmark of the kick.
 ///
-///   1. Build a smoothed amplitude envelope of the drum stem.
-///   2. For each beat, find the steepest rising edge (argmax of
-///      finite difference) inside ±window_ms.
-///   3. Record offset = rising_edge_time - beat_time per beat.
-///   4. Take the median offset across all beats with enough energy.
-///   5. Shift the entire grid by that single value.
+/// The landmark we use is the **trough preceding the kick's rise**,
+/// not the rise itself. Rising-edge / argmax-derivative lands at
+/// different relative positions depending on attack time (3 ms
+/// punchy vs 20 ms sub-heavy kick), so it produces inconsistent
+/// alignment across tracks. The trough is a stable physical event
+/// — it's the moment the previous decay ends — and is the same
+/// "foot of the rise" anchor librosa's `onset_backtrack` uses for
+/// click-track / slicing applications.
 ///
-/// This way every track ends up grid-anchored to the same place on
-/// the kick — the rising edge — so two tracks with their respective
-/// grids snapped sync against each other audibly.
+/// Pipeline (kick-body band-limited spectral flux + onset backtrack):
+///   1. Mono-sum the drum stem.
+///   2. STFT (1024 samples, 256-sample hop, Hann) over the stem.
+///   3. Sum |X[k]| over bins covering ~30–120 Hz (the kick body),
+///      yielding a low-band magnitude envelope per frame.
+///   4. Half-wave-rectified flux: positive frame-to-frame differences.
+///   5. 3-frame moving-average smoothing for stable minima.
+///   6. For each detected beat, find the local peak of the flux
+///      envelope inside ±60 ms, then walk backward to the nearest
+///      local minimum (= the trough preceding that kick).
+///   7. Per-beat offset = trough_time - beat_time. Keep only beats
+///      whose peak is above 3× the median flux (rejects breakdowns
+///      and silence).
+///   8. Apply the median offset across all valid beats — preserves
+///      BPM-derived spacing, fixes only the phase.
 ///
-/// Returns the shifted grid. If no usable kicks are found (e.g.,
-/// percussionless / ambient track), the original grid is returned
-/// unchanged.
-pub fn align_grid_to_kick_rising_edge(
+/// Returns the shifted grid + the applied offset in seconds. If
+/// fewer than 8 valid beats are found (ambient / percussionless
+/// tracks), returns the original grid unchanged with offset 0.
+pub fn align_grid_to_kick_trough(
     drums: &[f32],
     channels: u16,
     sample_rate: u32,
     beat_grid: &[f64],
-    window_ms: f32,
 ) -> (Vec<f64>, f64) {
     let ch = channels.max(1) as usize;
     let total_frames = drums.len() / ch;
-    if total_frames == 0 || beat_grid.len() < 4 {
+    if total_frames == 0 || beat_grid.len() < 8 {
         return (beat_grid.to_vec(), 0.0);
     }
-    // Smoothed |amplitude| envelope. 2 ms moving average — short
-    // enough to keep the rising edge sharp, long enough to filter
-    // out single-sample noise.
-    let smooth = ((sample_rate as f32 * 0.002) as usize).max(1);
-    let mut env = vec![0.0f32; total_frames];
-    let mut acc = 0.0f32;
+
+    // --- 1. Mono mix ---
+    let mut mono = Vec::<f32>::with_capacity(total_frames);
     for i in 0..total_frames {
         let mut s = 0.0f32;
-        for c in 0..ch { s += drums[i * ch + c].abs(); }
-        acc += s;
-        if i >= smooth {
-            let mut old = 0.0f32;
-            for c in 0..ch { old += drums[(i - smooth) * ch + c].abs(); }
-            acc -= old;
-        }
-        env[i] = acc / smooth as f32;
+        for c in 0..ch { s += drums[i * ch + c]; }
+        mono.push(s / ch as f32);
     }
-    // Global threshold for "this window contains a real kick" — half
-    // the median of beat-window peaks. Avoids snapping to noise floor
-    // in breakdowns or ambient sections.
-    let half = (sample_rate as f32 * window_ms / 1000.0) as usize;
-    let mut peaks: Vec<f32> = Vec::with_capacity(beat_grid.len());
-    for &t in beat_grid {
-        let center = (t * sample_rate as f64) as i64;
-        let lo = (center - half as i64).max(0) as usize;
-        let hi = ((center + half as i64) as usize).min(total_frames);
-        if lo >= hi { continue; }
-        let mut peak = 0.0f32;
-        for i in lo..hi { if env[i] > peak { peak = env[i]; } }
-        peaks.push(peak);
-    }
-    if peaks.is_empty() {
+
+    // --- 2-4. STFT + kick-band flux ---
+    const WIN: usize = 1024;
+    const HOP: usize = 256;
+    // Hann window.
+    let hann: Vec<f32> = (0..WIN)
+        .map(|n| 0.5 * (1.0 - (2.0 * PI * n as f32 / (WIN - 1) as f32).cos()))
+        .collect();
+    let n_frames = if total_frames < WIN { 0 } else { (total_frames - WIN) / HOP + 1 };
+    if n_frames < 8 {
         return (beat_grid.to_vec(), 0.0);
     }
-    peaks.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median_peak = peaks[peaks.len() / 2];
-    let threshold = median_peak * 0.5;
-    // Per-beat rising-edge offset.
-    let mut offsets_secs: Vec<f64> = Vec::with_capacity(beat_grid.len());
+    // Kick-body bins: 30-120 Hz at 44.1 kHz, 1024-point FFT →
+    // bin spacing = 43.07 Hz, so bins 1..=3 cover ~43-129 Hz.
+    let bin_spacing = sample_rate as f32 / WIN as f32;
+    let bin_lo = (30.0 / bin_spacing).round().max(1.0) as usize;
+    let bin_hi = (120.0 / bin_spacing).round() as usize;
+    let bin_hi = bin_hi.max(bin_lo + 1).min(WIN / 2);
+
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(WIN);
+    let mut buf = vec![Complex { re: 0.0, im: 0.0 }; WIN];
+    let mut prev_band: Vec<f32> = vec![0.0; bin_hi - bin_lo];
+    let mut flux = Vec::<f32>::with_capacity(n_frames);
+    for f in 0..n_frames {
+        let start = f * HOP;
+        for n in 0..WIN {
+            buf[n] = Complex { re: mono[start + n] * hann[n], im: 0.0 };
+        }
+        fft.process(&mut buf);
+        let mut sum_pos = 0.0f32;
+        for (i, k) in (bin_lo..bin_hi).enumerate() {
+            let m = (buf[k].re * buf[k].re + buf[k].im * buf[k].im).sqrt();
+            let d = m - prev_band[i];
+            if d > 0.0 { sum_pos += d; }
+            prev_band[i] = m;
+        }
+        flux.push(sum_pos);
+    }
+
+    // --- 5. Smooth with 3-frame moving average ---
+    let mut smooth = vec![0.0f32; n_frames];
+    for i in 0..n_frames {
+        let lo = i.saturating_sub(1);
+        let hi = (i + 2).min(n_frames);
+        let mut sum = 0.0f32;
+        for j in lo..hi { sum += flux[j]; }
+        smooth[i] = sum / (hi - lo) as f32;
+    }
+
+    // Global energy threshold: 3 × median(flux). Beats whose peak
+    // doesn't clear this are presumed to fall in a breakdown / silent
+    // section and don't contribute to the offset estimate.
+    let mut sorted = smooth.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_flux = sorted[sorted.len() / 2];
+    let energy_threshold = (median_flux * 3.0).max(1e-6);
+
+    // --- 6-7. Per-beat trough offsets ---
+    let frame_secs = HOP as f64 / sample_rate as f64;
+    let win_frames = (0.060 / frame_secs).round() as i64;
+    // The trough may sit slightly outside the ±60 ms peak window
+    // (e.g., a fast attack means the trough is just before the
+    // window's left edge). Allow the backtrack to extend a further
+    // ~30 ms left of the peak window.
+    let backtrack_extra = (0.030 / frame_secs).round() as i64;
+
+    let mut offsets_secs = Vec::<f64>::with_capacity(beat_grid.len());
     for &t in beat_grid {
-        let center = (t * sample_rate as f64) as i64;
-        let lo = (center - half as i64).max(0) as usize;
-        let hi = ((center + half as i64) as usize).min(total_frames);
+        let center_frame = (t / frame_secs).round() as i64;
+        let lo = (center_frame - win_frames).max(0) as usize;
+        let hi = ((center_frame + win_frames) as usize).min(n_frames);
         if lo + 1 >= hi { continue; }
-        // Quick energy check on this beat's window.
-        let mut peak = 0.0f32;
-        for i in lo..hi { if env[i] > peak { peak = env[i]; } }
-        if peak < threshold { continue; }
-        // Argmax of finite difference = steepest-rise sample.
-        let mut best_i = lo;
-        let mut best_d = -1.0f32;
-        for i in lo..hi - 1 {
-            let d = env[i + 1] - env[i];
-            if d > best_d {
-                best_d = d;
-                best_i = i + 1;
+        // Peak inside the window.
+        let mut peak_idx = lo;
+        let mut peak_v = -1.0f32;
+        for i in lo..hi {
+            if smooth[i] > peak_v {
+                peak_v = smooth[i];
+                peak_idx = i;
             }
         }
-        let edge_t = best_i as f64 / sample_rate as f64;
-        offsets_secs.push(edge_t - t);
+        if peak_v < energy_threshold { continue; }
+        // Walk backward to the first local minimum. A local min
+        // at i satisfies smooth[i-1] >= smooth[i] AND smooth[i] < smooth[i+1].
+        // Allow searching ~30 ms left of `lo`.
+        let backtrack_lo = (center_frame - win_frames - backtrack_extra).max(1) as usize;
+        let mut trough_idx = peak_idx;
+        let mut i = peak_idx;
+        while i > backtrack_lo {
+            i -= 1;
+            if i > 0
+                && i + 1 < n_frames
+                && smooth[i - 1] >= smooth[i]
+                && smooth[i] < smooth[i + 1]
+            {
+                trough_idx = i;
+                break;
+            }
+        }
+        if trough_idx == peak_idx {
+            // Never found a minimum (very rare — would mean energy
+            // is monotonic across the whole search window). Skip
+            // this beat rather than guessing.
+            continue;
+        }
+        let trough_t = trough_idx as f64 * frame_secs;
+        offsets_secs.push(trough_t - t);
     }
-    if offsets_secs.len() < 4 {
+
+    if offsets_secs.len() < 8 {
         return (beat_grid.to_vec(), 0.0);
     }
+
+    // --- 8. Median offset, applied as a single global shift ---
     offsets_secs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median_offset = offsets_secs[offsets_secs.len() / 2];
     let shifted: Vec<f64> = beat_grid.iter().map(|t| t + median_offset).collect();

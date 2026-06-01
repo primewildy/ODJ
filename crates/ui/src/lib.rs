@@ -865,17 +865,16 @@ impl DjApp {
                     // tracks land at the same point on the kick and
                     // sync cleanly against each other.
                     if !d.beat_grid.is_empty() {
-                        let (shifted, offset_secs) = analysis::align_grid_to_kick_rising_edge(
+                        let (shifted, offset_secs) = analysis::align_grid_to_kick_trough(
                             &s.stems.drums,
                             s.stems.channels,
                             s.stems.sample_rate,
                             &d.beat_grid,
-                            60.0,
                         );
                         if offset_secs.abs() > 1e-6 {
                             d.beat_grid = shifted;
                             eprintln!(
-                                "stems: kick-edge phase shift {:+.1} ms applied to {} beats",
+                                "stems: kick-trough phase shift {:+.1} ms applied to {} beats",
                                 offset_secs * 1000.0,
                                 d.beat_grid.len()
                             );
@@ -895,7 +894,7 @@ impl DjApp {
                             meta_changed = true;
                         } else {
                             eprintln!(
-                                "stems: kick-edge — grid already aligned (no usable kicks or shift < 1 µs)"
+                                "stems: kick-trough — grid unchanged (insufficient kicks detected)"
                             );
                         }
                     }
