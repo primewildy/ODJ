@@ -211,6 +211,11 @@ pub enum DeckCommand {
     /// Clear both IN and OUT, deactivating any loop. CUE returns to the
     /// normal cue_frame after this.
     LoopClear { deck: DeckId },
+    /// One-shot "auto loop" of `beats` whole beats: snap IN to the
+    /// nearest beat of the current playhead, OUT to the beat `beats`
+    /// steps further down the analysis grid. Same end-state as
+    /// LoopSetIn → LoopSetOut, just from a single button press.
+    LoopAuto { deck: DeckId, beats: u32 },
 }
 
 pub type CommandProducer = rtrb::Producer<DeckCommand>;

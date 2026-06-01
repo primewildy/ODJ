@@ -1346,6 +1346,13 @@ fn deck_controls(
             user_touched = true;
             let _ = sender.send(DeckCommand::LoopSetOut { deck });
         }
+        // One-bar auto-loop: snaps IN to current playhead and OUT
+        // four beats further along the grid. Same end-state as
+        // pressing IN then OUT a bar later, from a single click.
+        if ui.button("🔁 4").clicked() {
+            user_touched = true;
+            let _ = sender.send(DeckCommand::LoopAuto { deck, beats: 4 });
+        }
         if ui.add_enabled(has_loop, egui::Button::new("× ½")).clicked() {
             user_touched = true;
             let _ = sender.send(DeckCommand::LoopHalve { deck });

@@ -854,6 +854,16 @@ impl Mixer {
                 deck.loop_out = None;
                 deck.loop_exit_pending = false;
             }
+            DeckCommand::LoopAuto { beats, .. } => {
+                if beats >= 1 {
+                    if let Some((in_frame, out_frame)) = auto_loop_bounds(deck, beats) {
+                        deck.loop_in = Some(in_frame);
+                        deck.loop_out = Some(out_frame);
+                        deck.cue_frame = in_frame;
+                        deck.loop_exit_pending = false;
+                    }
+                }
+            }
             DeckCommand::Sync { .. } => unreachable!("handled above"),
             DeckCommand::SetCueGain { .. } => unreachable!("handled above"),
             DeckCommand::SetCueMix { .. } => unreachable!("handled above"),
@@ -1372,6 +1382,7 @@ fn cmd_target(cmd: &DeckCommand) -> DeckId {
         | DeckCommand::LoopHalve { deck }
         | DeckCommand::LoopDouble { deck }
         | DeckCommand::LoopClear { deck }
+        | DeckCommand::LoopAuto { deck, .. }
         | DeckCommand::Sync { deck } => *deck,
         DeckCommand::SetCueGain { .. } | DeckCommand::SetCueMix { .. } => {
             unreachable!("global headphone-bus commands have no deck target — handled in apply()")
@@ -1409,6 +1420,54 @@ fn snap_frame_to_beat(deck: &DeckState, frame: u64) -> u64 {
     if sr <= 0.0 { return frame; }
     let t = frame as f64 / sr;
     ((nearest_beat_secs(t, &an.beat_grid) * sr).max(0.0)) as u64
+}
+
+/// Compute IN/OUT source-frames for an N-beat auto-loop starting at
+/// the deck's current playhead. IN is the nearest beat to the
+/// playhead; OUT is `beats` entries further down the analysis grid.
+/// Falls back to BPM-derived spacing when the grid runs out (e.g.,
+/// auto-looping right at the end of the track). Returns None if we
+/// can't even establish IN — no analysis or no beats.
+fn auto_loop_bounds(deck: &DeckState, beats: u32) -> Option<(u64, u64)> {
+    let an = deck.analysis.as_ref()?;
+    let buf = deck.buffer.as_ref()?;
+    if an.beat_grid.is_empty() { return None; }
+    let sr = buf.sample_rate as f64;
+    if sr <= 0.0 { return None; }
+    let t = deck.playhead / sr;
+    // IN = nearest beat in the grid. Use binary_search_by + closer-
+    // neighbour pick (same as nearest_beat_secs but we also need the
+    // index to look up the OUT beat).
+    let idx = match an.beat_grid.binary_search_by(|b| {
+        b.partial_cmp(&t).unwrap_or(std::cmp::Ordering::Equal)
+    }) {
+        Ok(i) => i,
+        Err(i) => {
+            if i == 0 { 0 }
+            else if i >= an.beat_grid.len() { an.beat_grid.len() - 1 }
+            else {
+                let a = an.beat_grid[i - 1];
+                let b = an.beat_grid[i];
+                if (t - a).abs() <= (t - b).abs() { i - 1 } else { i }
+            }
+        }
+    };
+    let in_t = an.beat_grid[idx];
+    let out_idx = idx + beats as usize;
+    let out_t = if out_idx < an.beat_grid.len() {
+        an.beat_grid[out_idx]
+    } else if an.bpm > 0.0 {
+        // Off the end of the grid — extrapolate using BPM. Better
+        // than refusing to loop near the end of the track.
+        in_t + beats as f64 * 60.0 / an.bpm as f64
+    } else {
+        return None;
+    };
+    let in_frame = ((in_t * sr).max(0.0)) as u64;
+    let out_frame = ((out_t * sr).max(0.0)) as u64;
+    if out_frame <= in_frame { return None; }
+    let max = (buf.frames() as u64).saturating_sub(1);
+    Some((in_frame.min(max), out_frame.min(max)))
 }
 
 /// If the deck is inside an active loop and the playhead has reached
