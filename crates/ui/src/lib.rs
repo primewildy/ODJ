@@ -857,50 +857,47 @@ impl DjApp {
                     d.stem_hires_drums = s.hires_drums;
                     d.stem_hires_vocals = s.hires_vocals;
                     d.stem_hires_instr = s.hires_instr;
-                    // Second-pass beat refinement: now that the drum
-                    // stem is isolated, snap each beat from the noisy
-                    // full-mix detection to the actual kick peak. Only
-                    // refine if we already have a beat grid (skipped
-                    // for tracks whose initial analysis is still in
-                    // flight — the slow path will produce the grid
-                    // and `LoadEvent::Refined` will trigger a follow-
-                    // up snap then).
+                    // Phase refinement: shift the entire beat grid by
+                    // a single offset so every beat sits on the
+                    // rising edge of its kick. Tempo + spacing come
+                    // from the full-mix analysis (rock-solid in dance
+                    // music); only the *phase* gets refined here so
+                    // tracks land at the same point on the kick and
+                    // sync cleanly against each other.
                     if !d.beat_grid.is_empty() {
-                        let before = d.beat_grid.clone();
-                        d.beat_grid = analysis::snap_beats_to_drum_peaks(
+                        let (shifted, offset_secs) = analysis::align_grid_to_kick_rising_edge(
                             &s.stems.drums,
                             s.stems.channels,
                             s.stems.sample_rate,
                             &d.beat_grid,
-                            40.0,
+                            60.0,
                         );
-                        let max_shift_ms = d.beat_grid
-                            .iter()
-                            .zip(before.iter())
-                            .map(|(a, b)| ((a - b).abs() * 1000.0) as i32)
-                            .max()
-                            .unwrap_or(0);
-                        eprintln!(
-                            "stems: kick-snap refined {} beats (max shift {} ms)",
-                            d.beat_grid.len(),
-                            max_shift_ms
-                        );
-                        // Push refined grid to the audio engine so
-                        // Sync / Beat Align use the new alignment.
-                        let analysis = Arc::new(TrackAnalysis {
-                            analysis_version: 2,
-                            bpm: d.bpm,
-                            beat_grid: d.beat_grid.clone(),
-                            downbeats: d.downbeats.clone(),
-                            duration_secs: d.total_frames as f64 / d.sample_rate.max(1) as f64,
-                            sample_rate: d.sample_rate,
-                            key: d.key,
-                        });
-                        let _ = self.sender.send(DeckCommand::UpdateAnalysis {
-                            deck: s.deck,
-                            analysis,
-                        });
-                        meta_changed = true;
+                        if offset_secs.abs() > 1e-6 {
+                            d.beat_grid = shifted;
+                            eprintln!(
+                                "stems: kick-edge phase shift {:+.1} ms applied to {} beats",
+                                offset_secs * 1000.0,
+                                d.beat_grid.len()
+                            );
+                            let analysis = Arc::new(TrackAnalysis {
+                                analysis_version: 2,
+                                bpm: d.bpm,
+                                beat_grid: d.beat_grid.clone(),
+                                downbeats: d.downbeats.clone(),
+                                duration_secs: d.total_frames as f64 / d.sample_rate.max(1) as f64,
+                                sample_rate: d.sample_rate,
+                                key: d.key,
+                            });
+                            let _ = self.sender.send(DeckCommand::UpdateAnalysis {
+                                deck: s.deck,
+                                analysis,
+                            });
+                            meta_changed = true;
+                        } else {
+                            eprintln!(
+                                "stems: kick-edge — grid already aligned (no usable kicks or shift < 1 µs)"
+                            );
+                        }
                     }
                     let _ = self.sender.send(DeckCommand::SetStems {
                         deck: s.deck,

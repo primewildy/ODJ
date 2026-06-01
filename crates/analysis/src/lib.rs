@@ -51,75 +51,108 @@ const MIN_BPM: f32 = 60.0;
 const MAX_BPM: f32 = 200.0;
 const N_PHASES: usize = 32;
 
-/// Second-pass refinement using the isolated drum stem. The initial
-/// `analyse` runs on the full mix where the kick is often masked by
-/// other elements, so beats land near — but not exactly on — the
-/// kick. With drums isolated, every kick is a clean transient. For
-/// each beat in `beat_grid`, search a ±`window_ms` window in the drum
-/// stem and snap the beat to the local energy peak. Preserves grid
-/// length and ordering (returns a parallel Vec<f64>).
+/// Single-offset grid refinement using the isolated drum stem.
 ///
-/// Looks for the *peak* amplitude inside the window rather than the
-/// onset edge — perceptually the "boom" of the kick centres there
-/// for sub-heavy electronic kicks, and using a wider window matches
-/// what the user hears when tracks are layered.
-pub fn snap_beats_to_drum_peaks(
+/// The initial `analyse` gets the tempo + spacing right (dance music
+/// is metronomically steady — per-beat snapping would only introduce
+/// noise) but the *phase* can drift a few tens of ms because the
+/// kick is masked by other elements in the full mix. With drums
+/// isolated, every kick has a clean rising edge. We:
+///
+///   1. Build a smoothed amplitude envelope of the drum stem.
+///   2. For each beat, find the steepest rising edge (argmax of
+///      finite difference) inside ±window_ms.
+///   3. Record offset = rising_edge_time - beat_time per beat.
+///   4. Take the median offset across all beats with enough energy.
+///   5. Shift the entire grid by that single value.
+///
+/// This way every track ends up grid-anchored to the same place on
+/// the kick — the rising edge — so two tracks with their respective
+/// grids snapped sync against each other audibly.
+///
+/// Returns the shifted grid. If no usable kicks are found (e.g.,
+/// percussionless / ambient track), the original grid is returned
+/// unchanged.
+pub fn align_grid_to_kick_rising_edge(
     drums: &[f32],
     channels: u16,
     sample_rate: u32,
     beat_grid: &[f64],
     window_ms: f32,
-) -> Vec<f64> {
+) -> (Vec<f64>, f64) {
     let ch = channels.max(1) as usize;
     let total_frames = drums.len() / ch;
-    if total_frames == 0 || beat_grid.is_empty() {
-        return beat_grid.to_vec();
+    if total_frames == 0 || beat_grid.len() < 4 {
+        return (beat_grid.to_vec(), 0.0);
     }
-    // Quick mono-summed |amplitude| with a tiny smoothing window so
-    // we lock onto the energy lobe of each kick rather than a single
-    // transient sample. ~2 ms at 44.1 kHz ≈ 88 samples.
+    // Smoothed |amplitude| envelope. 2 ms moving average — short
+    // enough to keep the rising edge sharp, long enough to filter
+    // out single-sample noise.
     let smooth = ((sample_rate as f32 * 0.002) as usize).max(1);
     let mut env = vec![0.0f32; total_frames];
     let mut acc = 0.0f32;
-    let mut head = 0usize;
     for i in 0..total_frames {
         let mut s = 0.0f32;
         for c in 0..ch { s += drums[i * ch + c].abs(); }
         acc += s;
         if i >= smooth {
-            let old = {
-                let mut o = 0.0f32;
-                for c in 0..ch { o += drums[head * ch + c].abs(); }
-                o
-            };
+            let mut old = 0.0f32;
+            for c in 0..ch { old += drums[(i - smooth) * ch + c].abs(); }
             acc -= old;
-            head += 1;
         }
         env[i] = acc / smooth as f32;
     }
+    // Global threshold for "this window contains a real kick" — half
+    // the median of beat-window peaks. Avoids snapping to noise floor
+    // in breakdowns or ambient sections.
     let half = (sample_rate as f32 * window_ms / 1000.0) as usize;
-    beat_grid
-        .iter()
-        .map(|&t| {
-            let center = (t * sample_rate as f64) as i64;
-            let lo = (center - half as i64).max(0) as usize;
-            let hi = ((center + half as i64) as usize).min(total_frames);
-            if lo >= hi { return t; }
-            let mut best_i = lo;
-            let mut best_v = -1.0f32;
-            for i in lo..hi {
-                if env[i] > best_v {
-                    best_v = env[i];
-                    best_i = i;
-                }
+    let mut peaks: Vec<f32> = Vec::with_capacity(beat_grid.len());
+    for &t in beat_grid {
+        let center = (t * sample_rate as f64) as i64;
+        let lo = (center - half as i64).max(0) as usize;
+        let hi = ((center + half as i64) as usize).min(total_frames);
+        if lo >= hi { continue; }
+        let mut peak = 0.0f32;
+        for i in lo..hi { if env[i] > peak { peak = env[i]; } }
+        peaks.push(peak);
+    }
+    if peaks.is_empty() {
+        return (beat_grid.to_vec(), 0.0);
+    }
+    peaks.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_peak = peaks[peaks.len() / 2];
+    let threshold = median_peak * 0.5;
+    // Per-beat rising-edge offset.
+    let mut offsets_secs: Vec<f64> = Vec::with_capacity(beat_grid.len());
+    for &t in beat_grid {
+        let center = (t * sample_rate as f64) as i64;
+        let lo = (center - half as i64).max(0) as usize;
+        let hi = ((center + half as i64) as usize).min(total_frames);
+        if lo + 1 >= hi { continue; }
+        // Quick energy check on this beat's window.
+        let mut peak = 0.0f32;
+        for i in lo..hi { if env[i] > peak { peak = env[i]; } }
+        if peak < threshold { continue; }
+        // Argmax of finite difference = steepest-rise sample.
+        let mut best_i = lo;
+        let mut best_d = -1.0f32;
+        for i in lo..hi - 1 {
+            let d = env[i + 1] - env[i];
+            if d > best_d {
+                best_d = d;
+                best_i = i + 1;
             }
-            // Only accept the snap if there's actual energy in the
-            // window — silent regions or breakdowns leave the grid
-            // unmodified rather than drifting onto noise.
-            if best_v < 1e-4 { return t; }
-            best_i as f64 / sample_rate as f64
-        })
-        .collect()
+        }
+        let edge_t = best_i as f64 / sample_rate as f64;
+        offsets_secs.push(edge_t - t);
+    }
+    if offsets_secs.len() < 4 {
+        return (beat_grid.to_vec(), 0.0);
+    }
+    offsets_secs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_offset = offsets_secs[offsets_secs.len() / 2];
+    let shifted: Vec<f64> = beat_grid.iter().map(|t| t + median_offset).collect();
+    (shifted, median_offset)
 }
 
 pub fn analyse(buf: &TrackBuffer) -> AnalysisResult {
