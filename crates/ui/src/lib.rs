@@ -1387,29 +1387,22 @@ fn deck_controls(
     // the EQ and STEM columns). VOL sits between the two knob
     // columns, not under EQ — matches the layout the user described.
     //
-    //   ┌─PITCH─┐ ┌──EQ──┐ ┌─VOL─┐ ┌─STEMS─┐
-    //   │ (pad) │ │ HIGH │ │(pad)│ │ DRUMS │
-    //   │ (pad) │ │ MID  │ │(pad)│ │ VOCALS│
-    //   │ (pad) │ │ LOW  │ │(pad)│ │ INSTR │
-    //   │ label │ │      │ │label│ │       │
-    //   │ fader │ │      │ │fader│ │       │
-    //   │ value │ │      │ │value│ │       │
-    //   └───────┘ └──────┘ └─────┘ └───────┘
+    //   ┌──── LEFT ────┐ ┌──── RIGHT ────┐
+    //   │   HIGH knob  │ │   DRUMS knob  │
+    //   │   MID  knob  │ │  VOCALS knob  │
+    //   │   LOW  knob  │ │   INSTR knob  │
+    //   │   PITCH fad  │ │    VOL fad    │
+    //   │   value      │ │    value      │
+    //   └──────────────┘ └───────────────┘
     //
-    // The pad is rendered as 3 invisible widgets the same shape as a
-    // knob, so the ui.vertical item_spacing falls in the same
-    // places as it does in the EQ/STEM columns — labels line up to
-    // the pixel.
+    // Two columns of equal width. The fader in each column sits
+    // directly below the knob stack so its centre aligns with the
+    // centre of the knobs above it (PITCH under EQ, VOL under STEMS).
     const KNOB_DIA: f32 = 50.0;
-    const KNOB_FOOTPRINT: f32 = KNOB_DIA + 8.0;
-    const KNOB_WIDGET_H: f32 = 14.0 + KNOB_DIA + 14.0; // label + dial + value
-    const FADER_H: f32 = 150.0;
+    const COL_W: f32 = KNOB_DIA + 8.0;
+    const FADER_H: f32 = 110.0;
     let track_loaded = d.loaded_path.is_some();
     let stems_ready = d.telemetry.are_stems_loaded();
-    // When no track is loaded, show the stem labels in their normal
-    // uppercase form so the resting state of both decks looks the
-    // same. Only switch to the "separating…" hint when we're
-    // actually waiting on the worker for THIS deck.
     let show_separating = track_loaded && !stems_ready;
     let (drums_lbl, vocals_lbl, instr_lbl) = if show_separating {
         ("drums…", "vocals…", "instr…")
@@ -1417,25 +1410,10 @@ fn deck_controls(
         ("DRUMS", "VOCALS", "INSTR")
     };
     ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 18.0;
-        // PITCH column.
-        fader_column(ui, KNOB_FOOTPRINT, KNOB_WIDGET_H, FADER_H, "PITCH", |ui| {
-            let mut speed = d.telemetry.current_speed();
-            let r = ui.add_sized(
-                [KNOB_FOOTPRINT, FADER_H],
-                egui::Slider::new(&mut speed, PITCH_MIN..=PITCH_MAX)
-                    .vertical()
-                    .fixed_decimals(3)
-                    .show_value(false),
-            );
-            if r.changed() {
-                user_touched = true;
-                let _ = sender.send(DeckCommand::SetSpeed { deck, ratio: speed });
-            }
-            ui.label(format!("{:.3}", speed));
-        });
-        // EQ column.
+        ui.spacing_mut().item_spacing.x = 40.0;
+        // ---- Left column: EQ stack + PITCH fader ----
         ui.vertical(|ui| {
+            ui.set_min_width(COL_W);
             let cur_high = d.telemetry.current_eq_high_db();
             if let Some(v) = knob(ui, "HIGH", cur_high, -25.0..=6.0, KNOB_DIA) {
                 user_touched = true;
@@ -1451,25 +1429,27 @@ fn deck_controls(
                 user_touched = true;
                 let _ = sender.send(DeckCommand::SetEqLow { deck, db: v });
             }
+            ui.add_space(6.0);
+            ui.vertical_centered(|ui| {
+                ui.label("PITCH");
+                let mut speed = d.telemetry.current_speed();
+                let r = ui.add_sized(
+                    [COL_W, FADER_H],
+                    egui::Slider::new(&mut speed, PITCH_MIN..=PITCH_MAX)
+                        .vertical()
+                        .fixed_decimals(3)
+                        .show_value(false),
+                );
+                if r.changed() {
+                    user_touched = true;
+                    let _ = sender.send(DeckCommand::SetSpeed { deck, ratio: speed });
+                }
+                ui.label(format!("{:.3}", speed));
+            });
         });
-        // VOL column — same shape as PITCH so the two faders line up.
-        fader_column(ui, KNOB_FOOTPRINT, KNOB_WIDGET_H, FADER_H, "VOL", |ui| {
-            let mut gain = d.telemetry.current_gain();
-            let r = ui.add_sized(
-                [KNOB_FOOTPRINT, FADER_H],
-                egui::Slider::new(&mut gain, 0.0..=1.0)
-                    .vertical()
-                    .fixed_decimals(2)
-                    .show_value(false),
-            );
-            if r.changed() {
-                user_touched = true;
-                let _ = sender.send(DeckCommand::SetGain { deck, gain });
-            }
-            ui.label(format!("{:.2}", gain));
-        });
-        // STEM column.
+        // ---- Right column: STEM stack + VOL fader ----
         ui.vertical(|ui| {
+            ui.set_min_width(COL_W);
             let cur_drums = d.telemetry.current_stem_drums();
             if let Some(v) = knob_colored(
                 ui, drums_lbl, cur_drums, 0.0..=1.5, KNOB_DIA, stem_indicator(STEM_COLOR_DRUMS),
@@ -1491,6 +1471,23 @@ fn deck_controls(
                 user_touched = true;
                 let _ = sender.send(DeckCommand::SetStemInstruments { deck, gain: v });
             }
+            ui.add_space(6.0);
+            ui.vertical_centered(|ui| {
+                ui.label("VOL");
+                let mut gain = d.telemetry.current_gain();
+                let r = ui.add_sized(
+                    [COL_W, FADER_H],
+                    egui::Slider::new(&mut gain, 0.0..=1.0)
+                        .vertical()
+                        .fixed_decimals(2)
+                        .show_value(false),
+                );
+                if r.changed() {
+                    user_touched = true;
+                    let _ = sender.send(DeckCommand::SetGain { deck, gain });
+                }
+                ui.label(format!("{:.2}", gain));
+            });
         });
     });
 
@@ -1600,27 +1597,6 @@ fn arcade_button_inner(
         Color32::WHITE,
     );
     (resp, down)
-}
-
-/// Renders a vertical fader column with 3 invisible knob-shaped slots
-/// at the top so its fader + label + value end up at the same Y as
-/// the bottom of an adjacent 3-knob column. Keeps PITCH and VOL
-/// aligned regardless of egui's per-widget item_spacing.
-fn fader_column(
-    ui: &mut egui::Ui,
-    knob_w: f32,
-    knob_h: f32,
-    _fader_h: f32,
-    label: &str,
-    body: impl FnOnce(&mut egui::Ui),
-) {
-    ui.vertical(|ui| {
-        for _ in 0..3 {
-            ui.allocate_exact_size(Vec2::new(knob_w, knob_h), Sense::hover());
-        }
-        ui.label(label);
-        body(ui);
-    });
 }
 
 /// Rotary knob — circular dial with an indicator line at the current
