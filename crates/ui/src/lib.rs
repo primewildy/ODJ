@@ -1327,6 +1327,51 @@ fn deck_controls(
         }
     });
 
+    // Loop controls. Sits between the track info / mode toggles and
+    // the channel strip below. IN/OUT capture the playhead (beat-
+    // quantised in the engine); double / half / clear act on the
+    // currently-active loop; EXIT lets the loop finish its current
+    // iteration then continues. All commands are no-ops if the
+    // relevant loop state isn't set, but we still grey out the
+    // buttons to make that obvious.
+    ui.horizontal(|ui| {
+        let loop_range = d.telemetry.loop_range();
+        let has_in = d.telemetry.loop_in_frame().is_some();
+        let has_loop = loop_range.is_some();
+        if ui.button("◧ IN").clicked() {
+            user_touched = true;
+            let _ = sender.send(DeckCommand::LoopSetIn { deck });
+        }
+        if ui.add_enabled(has_in, egui::Button::new("◨ OUT")).clicked() {
+            user_touched = true;
+            let _ = sender.send(DeckCommand::LoopSetOut { deck });
+        }
+        if ui.add_enabled(has_loop, egui::Button::new("× ½")).clicked() {
+            user_touched = true;
+            let _ = sender.send(DeckCommand::LoopHalve { deck });
+        }
+        if ui.add_enabled(has_loop, egui::Button::new("× 2")).clicked() {
+            user_touched = true;
+            let _ = sender.send(DeckCommand::LoopDouble { deck });
+        }
+        if ui.add_enabled(has_loop, egui::Button::new("↪ EXIT")).clicked() {
+            user_touched = true;
+            let _ = sender.send(DeckCommand::LoopExit { deck });
+        }
+        if ui.add_enabled(has_in || has_loop, egui::Button::new("⌫ CLR")).clicked() {
+            user_touched = true;
+            let _ = sender.send(DeckCommand::LoopClear { deck });
+        }
+        // Loop length readout in beats when active.
+        if let (Some((i, o)), true) = (loop_range, d.bpm > 0.0 && d.sample_rate > 0) {
+            let beats = ((o - i) as f64 / d.sample_rate as f64) * (d.bpm as f64 / 60.0);
+            ui.colored_label(
+                Color32::from_rgb(255, 200, 80),
+                format!("loop: {:.0} beats", beats),
+            );
+        }
+    });
+
     ui.add_space(6.0);
 
     // Channel strip: four columns of equal height. PITCH and VOL are
@@ -1700,6 +1745,26 @@ fn overview_waveform(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sende
         }
     }
 
+    // Loop region overlay (overview-wide, very translucent so it
+    // doesn't obscure the waveform on long tracks where the loop
+    // span is only a few pixels).
+    if let Some((in_f, out_f)) = d.telemetry.loop_range() {
+        let in_frac = (in_f as f32 / d.total_frames.max(1) as f32).clamp(0.0, 1.0);
+        let out_frac = (out_f as f32 / d.total_frames.max(1) as f32).clamp(0.0, 1.0);
+        if out_frac > in_frac {
+            let x0 = rect.left() + in_frac * w;
+            let x1 = (rect.left() + out_frac * w).max(x0 + 1.0);
+            let region = egui::Rect::from_min_max(
+                Pos2::new(x0, rect.top()),
+                Pos2::new(x1, rect.bottom()),
+            );
+            painter.rect_filled(
+                region, 0.0,
+                Color32::from_rgba_premultiplied(120, 100, 20, 90),
+            );
+        }
+    }
+
     let head_frac = d.telemetry.playhead_frames() as f32 / d.total_frames.max(1) as f32;
     let head_x = rect.left() + head_frac.clamp(0.0, 1.0) * w;
     painter.line_segment(
@@ -1800,6 +1865,44 @@ fn zoom_view(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
                     &painter, &d.hires, peaks_per_sec, view_start, window_secs,
                     track_secs, rect.left(), mid, h * 0.45, cols, stroke,
                 );
+            }
+        }
+    }
+
+    // Loop region highlight. Paint *behind* the beat grid so the
+    // grid lines stay readable. Translucent yellow fills the loop
+    // span; brighter vertical lines at IN and OUT mark the bounds.
+    if let Some((in_f, out_f)) = d.telemetry.loop_range() {
+        if d.sample_rate > 0 {
+            let in_t = in_f as f64 / d.sample_rate as f64;
+            let out_t = out_f as f64 / d.sample_rate as f64;
+            if out_t > view_start && in_t < view_end {
+                let x0 = t_to_x(in_t.max(view_start));
+                let x1 = t_to_x(out_t.min(view_end));
+                if x1 > x0 {
+                    let region = egui::Rect::from_min_max(
+                        Pos2::new(x0, rect.top()),
+                        Pos2::new(x1, rect.bottom()),
+                    );
+                    painter.rect_filled(
+                        region, 0.0,
+                        Color32::from_rgba_premultiplied(60, 50, 10, 70),
+                    );
+                }
+                if in_t >= view_start && in_t <= view_end {
+                    let x = t_to_x(in_t);
+                    painter.line_segment(
+                        [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                        Stroke::new(2.0, Color32::from_rgb(255, 215, 80)),
+                    );
+                }
+                if out_t >= view_start && out_t <= view_end {
+                    let x = t_to_x(out_t);
+                    painter.line_segment(
+                        [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                        Stroke::new(2.0, Color32::from_rgb(255, 215, 80)),
+                    );
+                }
             }
         }
     }

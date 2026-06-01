@@ -188,6 +188,29 @@ pub enum DeckCommand {
     /// 0 = pure master in the headphones, 1 = pure cue (only the decks
     /// with `cue_on`). Intermediate values mix the two. Clamped to [0, 1].
     SetCueMix { mix: f32 },
+    /// Set the loop IN point to the deck's current playhead, snapped to
+    /// the nearest beat. Does NOT activate the loop until LoopSetOut is
+    /// also called — clears any pending exit.
+    LoopSetIn { deck: DeckId },
+    /// Set the loop OUT point to the deck's current playhead, snapped to
+    /// the nearest beat. Activates the loop if IN is already set and the
+    /// resulting OUT is strictly after IN; otherwise no-op.
+    LoopSetOut { deck: DeckId },
+    /// Mark the active loop for graceful exit. Playback continues looping
+    /// until the playhead would next reach OUT, at which point the loop
+    /// is cleared and playback continues past OUT into the track. No-op
+    /// if no loop is active.
+    LoopExit { deck: DeckId },
+    /// Halve the active loop's length: OUT := IN + (OUT - IN) / 2,
+    /// snapped to nearest beat. Clamped to ≥ 1 beat. No-op if no loop.
+    LoopHalve { deck: DeckId },
+    /// Double the active loop's length: OUT := IN + 2 × (OUT - IN),
+    /// snapped to nearest beat, clamped to remain inside the buffer.
+    /// No-op if no loop.
+    LoopDouble { deck: DeckId },
+    /// Clear both IN and OUT, deactivating any loop. CUE returns to the
+    /// normal cue_frame after this.
+    LoopClear { deck: DeckId },
 }
 
 pub type CommandProducer = rtrb::Producer<DeckCommand>;

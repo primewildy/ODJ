@@ -80,6 +80,11 @@ pub struct DeckTelemetry {
     /// track. The UI uses this to grey out / activate the stem knobs.
     pub stems_loaded: Arc<AtomicBool>,
     pub cue_on: Arc<AtomicBool>,
+    /// Loop IN / OUT in source-frames. `u64::MAX` = unset. The UI
+    /// reads these to render the loop region highlight and gate the
+    /// loop button enabled/disabled state.
+    pub loop_in: Arc<AtomicU64>,
+    pub loop_out: Arc<AtomicU64>,
 }
 
 impl DeckTelemetry {
@@ -100,6 +105,8 @@ impl DeckTelemetry {
             stem_instruments: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
             stems_loaded: Arc::new(AtomicBool::new(false)),
             cue_on: Arc::new(AtomicBool::new(false)),
+            loop_in: Arc::new(AtomicU64::new(u64::MAX)),
+            loop_out: Arc::new(AtomicU64::new(u64::MAX)),
         }
     }
 
@@ -123,6 +130,17 @@ impl DeckTelemetry {
     }
     pub fn is_cue_on(&self) -> bool {
         self.cue_on.load(Ordering::Relaxed)
+    }
+    /// Loop bounds in source-frames. Returns `Some((in, out))` only
+    /// when both are set; the UI uses this to render the loop region.
+    pub fn loop_range(&self) -> Option<(u64, u64)> {
+        let i = self.loop_in.load(Ordering::Relaxed);
+        let o = self.loop_out.load(Ordering::Relaxed);
+        if i == u64::MAX || o == u64::MAX { None } else { Some((i, o)) }
+    }
+    pub fn loop_in_frame(&self) -> Option<u64> {
+        let v = self.loop_in.load(Ordering::Relaxed);
+        if v == u64::MAX { None } else { Some(v) }
     }
     pub fn current_eq_low_db(&self) -> f32 {
         f32::from_bits(self.eq_low_db.load(Ordering::Relaxed))
@@ -473,6 +491,14 @@ struct DeckState {
     gain_drums: f32,
     gain_vocals: f32,
     gain_instruments: f32,
+    /// Beat-quantised loop bounds. Loop is active iff both are Some.
+    /// While active and `loop_exit_pending == false`, playback wraps
+    /// from loop_out back to loop_in. Setting `loop_exit_pending`
+    /// lets the current iteration complete naturally then clears
+    /// both bounds.
+    loop_in: Option<u64>,
+    loop_out: Option<u64>,
+    loop_exit_pending: bool,
 }
 
 impl DeckState {
@@ -504,6 +530,9 @@ impl DeckState {
             gain_drums: 1.0,
             gain_vocals: 1.0,
             gain_instruments: 1.0,
+            loop_in: None,
+            loop_out: None,
+            loop_exit_pending: false,
         }
     }
 }
@@ -667,9 +696,13 @@ impl Mixer {
             }
             // Pioneer CUE state machine. With quantize on, the "set cue"
             // branch snaps the new cue to the nearest beat from analysis.
+            // When a loop is active, CUE returns to loop IN instead of
+            // cue_frame so you can scrub back to the start of the loop
+            // mid-jam.
             DeckCommand::CuePress(_) => {
+                let target = deck.loop_in.unwrap_or(deck.cue_frame);
                 if deck.playing {
-                    deck.playhead = deck.cue_frame as f64;
+                    deck.playhead = target as f64;
                     deck.playing = false;
                     deck.in_preview = false;
                 } else {
@@ -682,7 +715,8 @@ impl Mixer {
             }
             DeckCommand::CueRelease(_) => {
                 if deck.in_preview {
-                    deck.playhead = deck.cue_frame as f64;
+                    let target = deck.loop_in.unwrap_or(deck.cue_frame);
+                    deck.playhead = target as f64;
                     deck.playing = false;
                     deck.in_preview = false;
                 }
@@ -769,6 +803,52 @@ impl Mixer {
             }
             DeckCommand::SetCueOn { on, .. } => {
                 deck.cue_on = on;
+            }
+            DeckCommand::LoopSetIn { .. } => {
+                let snapped = snap_to_beat_always(deck);
+                deck.loop_in = Some(snapped);
+                deck.loop_exit_pending = false;
+                // If the existing OUT is now ≤ IN, clear it — the new
+                // IN invalidated the previous loop. User must press
+                // OUT again to re-activate.
+                if let Some(o) = deck.loop_out {
+                    if o <= snapped { deck.loop_out = None; }
+                }
+            }
+            DeckCommand::LoopSetOut { .. } => {
+                if let Some(in_f) = deck.loop_in {
+                    let snapped = snap_to_beat_always(deck);
+                    if snapped > in_f {
+                        deck.loop_out = Some(snapped);
+                        deck.loop_exit_pending = false;
+                    }
+                }
+            }
+            DeckCommand::LoopExit { .. } => {
+                if deck.loop_in.is_some() && deck.loop_out.is_some() {
+                    deck.loop_exit_pending = true;
+                }
+            }
+            DeckCommand::LoopHalve { .. } => {
+                if let (Some(i), Some(o)) = (deck.loop_in, deck.loop_out) {
+                    let new_o_raw = i + (o - i) / 2;
+                    let snapped = snap_frame_to_beat(deck, new_o_raw);
+                    if snapped > i { deck.loop_out = Some(snapped); }
+                }
+            }
+            DeckCommand::LoopDouble { .. } => {
+                if let (Some(i), Some(o)) = (deck.loop_in, deck.loop_out) {
+                    let new_o_raw = i + (o - i) * 2;
+                    let max = deck.buffer.as_ref().map(|b| (b.frames() as u64).saturating_sub(1)).unwrap_or(new_o_raw);
+                    let new_o_clamped = new_o_raw.min(max);
+                    let snapped = snap_frame_to_beat(deck, new_o_clamped);
+                    if snapped > i { deck.loop_out = Some(snapped); }
+                }
+            }
+            DeckCommand::LoopClear { .. } => {
+                deck.loop_in = None;
+                deck.loop_out = None;
+                deck.loop_exit_pending = false;
             }
             DeckCommand::Sync { .. } => unreachable!("handled above"),
             DeckCommand::SetCueGain { .. } => unreachable!("handled above"),
@@ -962,6 +1042,8 @@ fn publish_telemetry(deck: &DeckState, tel: &DeckTelemetry) {
     tel.stems_loaded
         .store(deck.stems.is_some(), Ordering::Relaxed);
     tel.cue_on.store(deck.cue_on, Ordering::Relaxed);
+    tel.loop_in.store(deck.loop_in.unwrap_or(u64::MAX), Ordering::Relaxed);
+    tel.loop_out.store(deck.loop_out.unwrap_or(u64::MAX), Ordering::Relaxed);
 }
 
 /// Shift `this` deck's playhead so its nearest beat lines up in real time
@@ -1112,6 +1194,7 @@ fn render_deck(deck: &mut DeckState, out: &mut [f32], out_channels: usize, engin
             }
         }
         deck.playhead += step;
+        maybe_loop_wrap(deck);
     }
 }
 
@@ -1231,6 +1314,7 @@ fn render_deck_pv(deck: &mut DeckState, out: &mut [f32], out_channels: usize, en
                     }
                 }
                 deck.playhead += src_step;
+                maybe_loop_wrap(deck);
             }
             if ended {
                 deck.playing = false;
@@ -1278,6 +1362,12 @@ fn cmd_target(cmd: &DeckCommand) -> DeckId {
         | DeckCommand::SetEqHigh { deck, .. }
         | DeckCommand::SetBeatAlign { deck, .. }
         | DeckCommand::SetCueOn { deck, .. }
+        | DeckCommand::LoopSetIn { deck }
+        | DeckCommand::LoopSetOut { deck }
+        | DeckCommand::LoopExit { deck }
+        | DeckCommand::LoopHalve { deck }
+        | DeckCommand::LoopDouble { deck }
+        | DeckCommand::LoopClear { deck }
         | DeckCommand::Sync { deck } => *deck,
         DeckCommand::SetCueGain { .. } | DeckCommand::SetCueMix { .. } => {
             unreachable!("global headphone-bus commands have no deck target — handled in apply()")
@@ -1287,6 +1377,61 @@ fn cmd_target(cmd: &DeckCommand) -> DeckId {
 
 /// Return the source-frame index closest to a beat in the analysis grid,
 /// or the current playhead if quantize is off / no analysis / no beats.
+/// Snap the deck's current playhead to the nearest beat, ignoring the
+/// user-facing `quantize` flag. Loop in/out and the LoopHalve/Double
+/// length adjustments are *always* beat-quantised so different decks'
+/// loops can't drift apart by sub-beat phase. Falls back to the raw
+/// playhead when there's no analysis.
+fn snap_to_beat_always(deck: &DeckState) -> u64 {
+    let (Some(an), Some(buf)) = (deck.analysis.as_ref(), deck.buffer.as_ref()) else {
+        return deck.playhead as u64;
+    };
+    if an.beat_grid.is_empty() { return deck.playhead as u64; }
+    let sr = buf.sample_rate as f64;
+    if sr <= 0.0 { return deck.playhead as u64; }
+    let t = deck.playhead / sr;
+    ((nearest_beat_secs(t, &an.beat_grid) * sr).max(0.0)) as u64
+}
+
+/// Snap an arbitrary source-frame index to the nearest beat in the
+/// deck's analysis. Used by LoopHalve / LoopDouble to keep the OUT
+/// point beat-aligned after a length change.
+fn snap_frame_to_beat(deck: &DeckState, frame: u64) -> u64 {
+    let (Some(an), Some(buf)) = (deck.analysis.as_ref(), deck.buffer.as_ref()) else {
+        return frame;
+    };
+    if an.beat_grid.is_empty() { return frame; }
+    let sr = buf.sample_rate as f64;
+    if sr <= 0.0 { return frame; }
+    let t = frame as f64 / sr;
+    ((nearest_beat_secs(t, &an.beat_grid) * sr).max(0.0)) as u64
+}
+
+/// If the deck is inside an active loop and the playhead has reached
+/// (or passed) the OUT point, wrap it back to IN. If a graceful exit
+/// is pending, clear the loop on this iteration's last wrap and let
+/// playback continue past OUT — i.e. the user gets the remainder of
+/// the current loop pass and then exits cleanly.
+#[inline]
+fn maybe_loop_wrap(deck: &mut DeckState) {
+    let (Some(loop_in), Some(loop_out)) = (deck.loop_in, deck.loop_out) else {
+        return;
+    };
+    if deck.playhead < loop_out as f64 { return; }
+    if deck.loop_exit_pending {
+        // Graceful exit: clear loop, leave playhead alone so playback
+        // continues past OUT into the rest of the track.
+        deck.loop_in = None;
+        deck.loop_out = None;
+        deck.loop_exit_pending = false;
+        return;
+    }
+    // Preserve the fractional overshoot to keep playback smooth at
+    // non-integer speeds.
+    let overshoot = deck.playhead - loop_out as f64;
+    deck.playhead = loop_in as f64 + overshoot.max(0.0);
+}
+
 fn snap_to_beat(deck: &DeckState) -> u64 {
     if !deck.quantize {
         return deck.playhead as u64;
