@@ -1409,11 +1409,17 @@ fn deck_controls(
     } else {
         ("DRUMS", "VOCALS", "INSTR")
     };
+    let column = |ui: &mut egui::Ui, content: &mut dyn FnMut(&mut egui::Ui)| {
+        ui.allocate_ui_with_layout(
+            Vec2::new(COL_W, ui.available_height()),
+            egui::Layout::top_down(egui::Align::Center),
+            |ui| content(ui),
+        );
+    };
     ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 40.0;
+        ui.spacing_mut().item_spacing.x = 60.0;
         // ---- Left column: EQ stack + PITCH fader ----
-        ui.vertical(|ui| {
-            ui.set_min_width(COL_W);
+        column(ui, &mut |ui| {
             let cur_high = d.telemetry.current_eq_high_db();
             if let Some(v) = knob(ui, "HIGH", cur_high, -25.0..=6.0, KNOB_DIA) {
                 user_touched = true;
@@ -1430,26 +1436,23 @@ fn deck_controls(
                 let _ = sender.send(DeckCommand::SetEqLow { deck, db: v });
             }
             ui.add_space(6.0);
-            ui.vertical_centered(|ui| {
-                ui.label("PITCH");
-                let mut speed = d.telemetry.current_speed();
-                let r = ui.add_sized(
-                    [COL_W, FADER_H],
-                    egui::Slider::new(&mut speed, PITCH_MIN..=PITCH_MAX)
-                        .vertical()
-                        .fixed_decimals(3)
-                        .show_value(false),
-                );
-                if r.changed() {
-                    user_touched = true;
-                    let _ = sender.send(DeckCommand::SetSpeed { deck, ratio: speed });
-                }
-                ui.label(format!("{:.3}", speed));
-            });
+            ui.label("PITCH");
+            let mut speed = d.telemetry.current_speed();
+            let r = ui.add_sized(
+                [COL_W, FADER_H],
+                egui::Slider::new(&mut speed, PITCH_MIN..=PITCH_MAX)
+                    .vertical()
+                    .fixed_decimals(3)
+                    .show_value(false),
+            );
+            if r.changed() {
+                user_touched = true;
+                let _ = sender.send(DeckCommand::SetSpeed { deck, ratio: speed });
+            }
+            ui.label(format!("{:.3}", speed));
         });
         // ---- Right column: STEM stack + VOL fader ----
-        ui.vertical(|ui| {
-            ui.set_min_width(COL_W);
+        column(ui, &mut |ui| {
             let cur_drums = d.telemetry.current_stem_drums();
             if let Some(v) = knob_colored(
                 ui, drums_lbl, cur_drums, 0.0..=1.5, KNOB_DIA, stem_indicator(STEM_COLOR_DRUMS),
@@ -1472,22 +1475,20 @@ fn deck_controls(
                 let _ = sender.send(DeckCommand::SetStemInstruments { deck, gain: v });
             }
             ui.add_space(6.0);
-            ui.vertical_centered(|ui| {
-                ui.label("VOL");
-                let mut gain = d.telemetry.current_gain();
-                let r = ui.add_sized(
-                    [COL_W, FADER_H],
-                    egui::Slider::new(&mut gain, 0.0..=1.0)
-                        .vertical()
-                        .fixed_decimals(2)
-                        .show_value(false),
-                );
-                if r.changed() {
-                    user_touched = true;
-                    let _ = sender.send(DeckCommand::SetGain { deck, gain });
-                }
-                ui.label(format!("{:.2}", gain));
-            });
+            ui.label("VOL");
+            let mut gain = d.telemetry.current_gain();
+            let r = ui.add_sized(
+                [COL_W, FADER_H],
+                egui::Slider::new(&mut gain, 0.0..=1.0)
+                    .vertical()
+                    .fixed_decimals(2)
+                    .show_value(false),
+            );
+            if r.changed() {
+                user_touched = true;
+                let _ = sender.send(DeckCommand::SetGain { deck, gain });
+            }
+            ui.label(format!("{:.2}", gain));
         });
     });
 
