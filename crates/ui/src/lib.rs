@@ -42,9 +42,14 @@ const ZOOM_PLAYHEAD_FRAC: f32 = 0.33;
 // 3-stem overlay colours. Alpha ~50 % so overlapping columns blend
 // rather than mask each other. Drums = warm red (impact / energy),
 // bass = blue (low end), melody = yellow-green (vocals + harmonic).
-const STEM_COLOR_DRUMS: egui::Color32 = egui::Color32::from_rgba_premultiplied(110, 40, 30, 130);
-const STEM_COLOR_VOCALS: egui::Color32 = egui::Color32::from_rgba_premultiplied(40, 70, 110, 130);
-const STEM_COLOR_INSTR: egui::Color32 = egui::Color32::from_rgba_premultiplied(90, 110, 40, 130);
+// Full-saturation RGB triad with alpha around 60 % so overlapping
+// columns blend without occluding. Picked for high contrast on the
+// dark background: pure red for drums (impact), pure green for the
+// bass/vocal stem (rendered as "vocals" in UI), pure blue for the
+// instrumental remainder.
+const STEM_COLOR_DRUMS: egui::Color32 = egui::Color32::from_rgba_premultiplied(220, 50, 50, 150);
+const STEM_COLOR_VOCALS: egui::Color32 = egui::Color32::from_rgba_premultiplied(60, 200, 80, 150);
+const STEM_COLOR_INSTR: egui::Color32 = egui::Color32::from_rgba_premultiplied(70, 120, 230, 150);
 
 /// Background worker that fills the analysis cache by decoding +
 /// analysing each track that's not already in the cache. Spawned once at
@@ -1164,17 +1169,21 @@ fn deck_controls(
         DeckId::A => "Deck A",
         DeckId::B => "Deck B",
     };
-    // Header row. Title is truncated (ellipsis) so a long filename never
-    // wraps and pushes the controls below around.
+    let speed = d.telemetry.current_speed();
+    // Header row: deck label | BPM (with tempo % nudge alongside) | Key.
     ui.horizontal(|ui| {
         ui.heading(label);
         ui.separator();
-        let speed = d.telemetry.current_speed();
         let bpm_str = if d.bpm > 0.0 {
             if (speed - 1.0).abs() < 0.0005 {
                 format!("BPM: {:>5.2}", d.bpm)
             } else {
-                format!("BPM: {:>5.2} ({:>5.2})", d.bpm * speed, d.bpm)
+                format!(
+                    "BPM: {:>5.2} ({:>5.2}, {:>+5.2}%)",
+                    d.bpm * speed,
+                    d.bpm,
+                    (speed - 1.0) * 100.0,
+                )
             }
         } else {
             "BPM: --".to_string()
@@ -1186,6 +1195,24 @@ fn deck_controls(
             None => "Key: --".to_string(),
         };
         ui.label(key_str);
+        ui.separator();
+        // Time row: elapsed | remaining | total.
+        let total = if d.sample_rate > 0 {
+            d.total_frames as f64 / d.sample_rate as f64
+        } else { 0.0 };
+        let pos = d.playhead_secs().min(total);
+        let remaining = (total - pos).max(0.0);
+        let time_str = if total > 0.0 {
+            format!(
+                "{} / -{} / {}",
+                fmt_mmss(pos),
+                fmt_mmss(remaining),
+                fmt_mmss(total),
+            )
+        } else {
+            "--:-- / --:-- / --:--".to_string()
+        };
+        ui.label(time_str);
     });
     let title = d.title.as_deref().unwrap_or("(no track)");
     ui.add(egui::Label::new(title).truncate());
@@ -1206,30 +1233,10 @@ fn deck_controls(
         },
     );
 
-    // Transport: Play / CUE / Q / 🔒 / Sync / 🎧.
+    // Mode-toggle row: Q / pitch lock / Sync / 🎧 PFL.
+    // Play + CUE moved below the channel strip as arcade-style
+    // buttons (see the second `horizontal` after the strip).
     ui.horizontal(|ui| {
-        let playing = d.telemetry.is_playing();
-        let play_label = if playing { "⏸ Pause" } else { "▶ Play" };
-        if ui.button(play_label).clicked() {
-            user_touched = true;
-            let _ = sender.send(DeckCommand::PlayToggle(deck));
-        }
-
-        let cue_resp = ui.button("⏮ CUE");
-        let now_down = cue_resp.is_pointer_button_down_on();
-        match (d.cue_held, now_down) {
-            (false, true) => {
-                user_touched = true;
-                let _ = sender.send(DeckCommand::CuePress(deck));
-            }
-            (true, false) => {
-                user_touched = true;
-                let _ = sender.send(DeckCommand::CueRelease(deck));
-            }
-            _ => {}
-        }
-        d.cue_held = now_down;
-
         if ui.checkbox(&mut d.quantize, "Q").changed() {
             user_touched = true;
             let _ = sender.send(DeckCommand::SetQuantize {
@@ -1237,8 +1244,6 @@ fn deck_controls(
                 on: d.quantize,
             });
         }
-        // Pitch lock toggle: when on, tempo changes without pitch change
-        // (phase vocoder). When off, vinyl-style coupled pitch+tempo.
         let mut pitch_lock = d.telemetry.is_pitch_locked();
         if ui.checkbox(&mut pitch_lock, "🔒 key").changed() {
             user_touched = true;
@@ -1251,19 +1256,12 @@ fn deck_controls(
             user_touched = true;
             let _ = sender.send(DeckCommand::Sync { deck });
         }
-        // PFL / cue monitor toggle. Mirrors deck.cue_on telemetry.
         let mut cue_on = d.telemetry.is_cue_on();
         if ui.toggle_value(&mut cue_on, "🎧 CUE").changed() {
             user_touched = true;
             let _ = sender.send(DeckCommand::SetCueOn { deck, on: cue_on });
         }
     });
-
-    ui.label(format!(
-        "{:>+5.2}% | {:.2}s",
-        (d.telemetry.current_speed() - 1.0) * 100.0,
-        d.playhead_secs(),
-    ));
 
     ui.add_space(6.0);
 
@@ -1373,7 +1371,113 @@ fn deck_controls(
             }
         });
     });
+
+    // Arcade-style transport row at the bottom of the deck: big round
+    // PLAY and CUE pads, sitting under the linear faders like the
+    // buttons on a CDJ/XDJ controller.
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 24.0;
+        let playing = d.telemetry.is_playing();
+        let play_clicked = arcade_button(
+            ui,
+            if playing { "⏸" } else { "▶" },
+            60.0,
+            if playing { Color32::from_rgb(190, 140, 50) } else { Color32::from_rgb(60, 180, 90) },
+        );
+        if play_clicked {
+            user_touched = true;
+            let _ = sender.send(DeckCommand::PlayToggle(deck));
+        }
+        // CUE: press + hold (Pioneer-style preview). The arcade
+        // button returns the same response so we can mirror the
+        // existing cue_held bookkeeping.
+        let (cue_clicked, cue_down) = arcade_button_held(
+            ui,
+            "CUE",
+            60.0,
+            Color32::from_rgb(200, 80, 80),
+        );
+        let _ = cue_clicked;
+        match (d.cue_held, cue_down) {
+            (false, true) => {
+                user_touched = true;
+                let _ = sender.send(DeckCommand::CuePress(deck));
+            }
+            (true, false) => {
+                user_touched = true;
+                let _ = sender.send(DeckCommand::CueRelease(deck));
+            }
+            _ => {}
+        }
+        d.cue_held = cue_down;
+    });
+
     user_touched
+}
+
+fn fmt_mmss(secs: f64) -> String {
+    let s = secs.max(0.0) as i64;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// Draws a big round arcade-style button. Returns true when clicked
+/// (release inside the bounds, like egui's normal Button).
+fn arcade_button(ui: &mut egui::Ui, label: &str, diameter: f32, base: Color32) -> bool {
+    let (resp, _down) = arcade_button_inner(ui, label, diameter, base);
+    resp.clicked()
+}
+
+/// Variant that also reports the "pointer is currently down" state,
+/// needed for press-and-hold semantics (CUE preview).
+fn arcade_button_held(ui: &mut egui::Ui, label: &str, diameter: f32, base: Color32) -> (bool, bool) {
+    let (resp, down) = arcade_button_inner(ui, label, diameter, base);
+    (resp.clicked(), down)
+}
+
+fn arcade_button_inner(
+    ui: &mut egui::Ui,
+    label: &str,
+    diameter: f32,
+    base: Color32,
+) -> (egui::Response, bool) {
+    let size = Vec2::splat(diameter);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    let down = resp.is_pointer_button_down_on();
+    let hovered = resp.hovered();
+    // Slight brightness boost on hover, big brightness boost when held.
+    let face = if down {
+        base
+    } else if hovered {
+        Color32::from_rgb(
+            (base.r() as u16 * 7 / 8 + 32).min(255) as u8,
+            (base.g() as u16 * 7 / 8 + 32).min(255) as u8,
+            (base.b() as u16 * 7 / 8 + 32).min(255) as u8,
+        )
+    } else {
+        Color32::from_rgb(
+            (base.r() as u16 * 5 / 8) as u8,
+            (base.g() as u16 * 5 / 8) as u8,
+            (base.b() as u16 * 5 / 8) as u8,
+        )
+    };
+    let painter = ui.painter();
+    let centre = rect.center();
+    let outer_r = diameter * 0.5;
+    let inner_r = outer_r - 4.0;
+    // Outer ring (the chunky bezel) + filled face.
+    painter.circle_filled(centre, outer_r, Color32::from_rgb(30, 30, 30));
+    painter.circle_filled(centre, inner_r, face);
+    // Top highlight ring for an arcade-pad look.
+    painter.circle_stroke(centre, inner_r - 2.0, Stroke::new(1.5, Color32::from_rgba_premultiplied(255, 255, 255, 40)));
+    painter.text(
+        centre,
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(diameter * 0.36),
+        Color32::WHITE,
+    );
+    (resp, down)
 }
 
 /// Renders a vertical fader column with 3 invisible knob-shaped slots
