@@ -13,13 +13,17 @@ use std::sync::{Arc, Mutex, OnceLock};
 use anyhow::{Context, Result, bail};
 use control::{TrackBuffer, TrackStems};
 use ndarray::Array4;
-use ort::execution_providers::CUDAExecutionProvider;
+use ort::execution_providers::{CUDAExecutionProvider, TensorRTExecutionProvider};
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Tensor;
 
 /// HTDemucs operates on 7.8 s segments at 44.1 kHz stereo.
 const MODEL_SR: u32 = 44_100;
 const MODEL_CHUNK: usize = 343_980; // == int(39/5 * 44100)
+// MansfieldPlumbing's demucsv4 ONNX outputs 6 stems
+// (drums, bass, other, vocals, guitar, piano). We fold guitar + piano
+// into "other" so the UI's INSTRUMENTS knob (which mixes bass + other
+// in the audio engine) controls everything that isn't drums or vocals.
 
 /// Per-process session cache. In-memory `Arc<TrackStems>` keyed by
 /// the input track's path. No disk persistence — stems-per-track at
@@ -87,13 +91,31 @@ fn model() -> Result<&'static Plan> {
             path.display()
         );
     }
+    // Engine cache dir — TensorRT compiles the ONNX into a per-GPU
+    // engine on first run (~1-5 min), then loads instantly thereafter.
+    let cache_dir = path
+        .parent()
+        .map(|p| p.join("trt-engines"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/dj-trt-engines"));
+    std::fs::create_dir_all(&cache_dir).ok();
+    let cache_path = cache_dir.to_string_lossy().into_owned();
+    let trt = TensorRTExecutionProvider::default()
+        .with_engine_cache(true)
+        .with_engine_cache_path(&cache_path)
+        .with_fp16(true) // Tensor Cores on Ampere+ → ~2× speedup
+        .build();
+    let cuda = CUDAExecutionProvider::default().build();
     let session = Session::builder()
         .context("ort Session::builder()")?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .with_execution_providers([CUDAExecutionProvider::default().build()])?
+        // TRT first; ort falls back to CUDA if it fails to register.
+        .with_execution_providers([trt, cuda])?
         .commit_from_file(&path)
         .with_context(|| format!("loading ONNX model at {}", path.display()))?;
-    eprintln!("stems: htdemucs ONNX ready (CUDA EP requested)");
+    eprintln!(
+        "stems: htdemucs ONNX ready (TensorRT FP16 requested, cache {})",
+        cache_path
+    );
     Ok(MODEL.get_or_init(|| session))
 }
 
@@ -168,29 +190,53 @@ fn run_htdemucs(input_path: &Path) -> Result<TrackStems> {
 
         let tr = std::time::Instant::now();
         let outputs = session
-            .run(ort::inputs!["audio" => Tensor::from_array(input)?]?)?;
+            .run(ort::inputs!["input" => Tensor::from_array(input)?]?)?;
         t_run += tr.elapsed();
 
         let te = std::time::Instant::now();
-        let stems_out = outputs["stems"].try_extract_tensor::<f32>()?;
+        let stems_out = outputs["output"].try_extract_tensor::<f32>()?;
         let slice = stems_out.as_slice().context("stems output not contiguous")?;
-        for (stem_idx, out_buf) in [
-            (0usize, &mut drums),
-            (1, &mut bass),
-            (2, &mut other),
-            (3, &mut vocals),
-        ] {
-            let base = stem_idx * 2 * MODEL_CHUNK;
-            for i in 0..MODEL_CHUNK {
-                let dst_i = start + i as isize;
-                if dst_i < 0 || (dst_i as usize) >= n_frames {
-                    continue;
-                }
-                let dst = dst_i as usize * 2;
-                let w = window[i];
-                out_buf[dst] += slice[base + i] * w;
-                out_buf[dst + 1] += slice[base + MODEL_CHUNK + i] * w;
+        // MansfieldPlumbing's demucsv4 emits 6 stems: drums, bass,
+        // other, vocals, guitar, piano. The UI only exposes 3 knobs
+        // (drums / vocals / instruments). Sum guitar + piano into
+        // "other" so the INSTRUMENTS knob covers everything that
+        // isn't drums or vocals — otherwise guitar / piano content
+        // would silently vanish from the mix.
+        let bo = 0 * 2 * MODEL_CHUNK; // drums
+        let bb = 1 * 2 * MODEL_CHUNK; // bass
+        let bt = 2 * 2 * MODEL_CHUNK; // other
+        let bv = 3 * 2 * MODEL_CHUNK; // vocals
+        let bg = 4 * 2 * MODEL_CHUNK; // guitar
+        let bp = 5 * 2 * MODEL_CHUNK; // piano
+        // fp16 inference occasionally produces inf / NaN samples
+        // (rare overflows in specific layers). Clamp before
+        // accumulation so a single bad sample doesn't poison the
+        // whole stem.
+        let clean = |x: f32| -> f32 {
+            if x.is_finite() {
+                x.clamp(-4.0, 4.0)
+            } else {
+                0.0
             }
+        };
+        for i in 0..MODEL_CHUNK {
+            let dst_i = start + i as isize;
+            if dst_i < 0 || (dst_i as usize) >= n_frames {
+                continue;
+            }
+            let dst = dst_i as usize * 2;
+            let w = window[i];
+            let il = i;
+            let ir = MODEL_CHUNK + i;
+            drums[dst] += clean(slice[bo + il]) * w;
+            drums[dst + 1] += clean(slice[bo + ir]) * w;
+            bass[dst] += clean(slice[bb + il]) * w;
+            bass[dst + 1] += clean(slice[bb + ir]) * w;
+            vocals[dst] += clean(slice[bv + il]) * w;
+            vocals[dst + 1] += clean(slice[bv + ir]) * w;
+            // other = original-other + guitar + piano (everything not drums/bass/vocals)
+            other[dst] += (clean(slice[bt + il]) + clean(slice[bg + il]) + clean(slice[bp + il])) * w;
+            other[dst + 1] += (clean(slice[bt + ir]) + clean(slice[bg + ir]) + clean(slice[bp + ir])) * w;
         }
         // Accumulate weight only on the first stem pass; same for all 4.
         for i in 0..MODEL_CHUNK {

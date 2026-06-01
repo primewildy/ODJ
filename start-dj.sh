@@ -81,6 +81,11 @@ if [[ -d "$NV_VENV" ]]; then
         [[ -d "$NV_VENV/$sub/lib" ]] && CUDA_LIBS="${CUDA_LIBS}${NV_VENV}/${sub}/lib:"
     done
 fi
+# TensorRT 10 libs (libnvinfer.so.10, libnvonnxparser.so.10, etc.)
+# extracted from tensorrt-cu12-libs PyPI wheel. ort's TRT EP needs
+# these on the loader path or it silently falls back to plain CUDA.
+TRT_LIBS="$(pwd)/stem-spike/trt-libs/tensorrt_libs"
+[[ -d "$TRT_LIBS" ]] && CUDA_LIBS="${CUDA_LIBS}${TRT_LIBS}:"
 LD_LIBRARY_PATH="${RELEASE_DIR}:${CUDA_LIBS}${LD_LIBRARY_PATH:-}" "${RELEASE_DIR}/dj" \
     --cue-device "KT USB Audio" \
     --midi "ODJ" \
