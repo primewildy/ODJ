@@ -1471,17 +1471,23 @@ fn deck_controls(
         // STEM column.
         ui.vertical(|ui| {
             let cur_drums = d.telemetry.current_stem_drums();
-            if let Some(v) = knob(ui, drums_lbl, cur_drums, 0.0..=1.5, KNOB_DIA) {
+            if let Some(v) = knob_colored(
+                ui, drums_lbl, cur_drums, 0.0..=1.5, KNOB_DIA, stem_indicator(STEM_COLOR_DRUMS),
+            ) {
                 user_touched = true;
                 let _ = sender.send(DeckCommand::SetStemDrums { deck, gain: v });
             }
             let cur_vocals = d.telemetry.current_stem_vocals();
-            if let Some(v) = knob(ui, vocals_lbl, cur_vocals, 0.0..=1.5, KNOB_DIA) {
+            if let Some(v) = knob_colored(
+                ui, vocals_lbl, cur_vocals, 0.0..=1.5, KNOB_DIA, stem_indicator(STEM_COLOR_VOCALS),
+            ) {
                 user_touched = true;
                 let _ = sender.send(DeckCommand::SetStemVocals { deck, gain: v });
             }
             let cur_instr = d.telemetry.current_stem_instruments();
-            if let Some(v) = knob(ui, instr_lbl, cur_instr, 0.0..=1.5, KNOB_DIA) {
+            if let Some(v) = knob_colored(
+                ui, instr_lbl, cur_instr, 0.0..=1.5, KNOB_DIA, stem_indicator(STEM_COLOR_INSTR),
+            ) {
                 user_touched = true;
                 let _ = sender.send(DeckCommand::SetStemInstruments { deck, gain: v });
             }
@@ -1628,6 +1634,30 @@ fn knob(
     range: std::ops::RangeInclusive<f32>,
     diameter: f32,
 ) -> Option<f32> {
+    knob_colored(ui, label, value, range, diameter, Color32::from_rgb(120, 200, 255))
+}
+
+/// Turn a translucent waveform colour into the opaque, vivid version
+/// used for a knob's indicator line. The waveform colours are stored
+/// pre-multiplied with alpha around 150 (≈60 % opacity) for blending;
+/// dividing back out gives roughly the original RGB the artist had in
+/// mind, which reads cleanly against the dark dial background.
+fn stem_indicator(c: Color32) -> Color32 {
+    let a = c.a().max(1) as f32;
+    let r = (c.r() as f32 * 255.0 / a).min(255.0) as u8;
+    let g = (c.g() as f32 * 255.0 / a).min(255.0) as u8;
+    let b = (c.b() as f32 * 255.0 / a).min(255.0) as u8;
+    Color32::from_rgb(r, g, b)
+}
+
+fn knob_colored(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: f32,
+    range: std::ops::RangeInclusive<f32>,
+    diameter: f32,
+    base_color: Color32,
+) -> Option<f32> {
     let label_h = 14.0;
     let value_h = 14.0;
     let pad_x = 4.0;
@@ -1658,10 +1688,16 @@ fn knob(
     let tip = center
         + Vec2::new(theta.sin() * radius * 0.85, -theta.cos() * radius * 0.85);
     let highlight = response.hovered() || response.dragged();
+    // Brighten the base colour by ~25 % on hover/drag so the user sees
+    // the active knob without changing its identity.
     let line_color = if highlight {
-        Color32::from_rgb(180, 220, 255)
+        Color32::from_rgb(
+            (base_color.r() as u16 + 60).min(255) as u8,
+            (base_color.g() as u16 + 60).min(255) as u8,
+            (base_color.b() as u16 + 60).min(255) as u8,
+        )
     } else {
-        Color32::from_rgb(120, 200, 255)
+        base_color
     };
     painter.line_segment([center, tip], Stroke::new(2.5, line_color));
 
