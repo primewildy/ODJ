@@ -41,6 +41,12 @@ impl Favourites {
         self.paths.contains(p)
     }
 
+    /// Snapshot of the inner set. Cloned into the auto-mix shared
+    /// state for cross-thread access.
+    pub fn paths(&self) -> &HashSet<PathBuf> {
+        &self.paths
+    }
+
     pub fn toggle(&mut self, p: &Path) {
         if !self.paths.remove(p) {
             self.paths.insert(p.to_path_buf());

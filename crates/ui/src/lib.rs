@@ -2,24 +2,39 @@
 //! the right. Each deck has: overview waveform, scrolling 16-beat zoom view
 //! with beat grid, transport (Play/Pause + CUE), pitch slider, quantize.
 
+mod auto_mix;
 mod persistence;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender as StdSender, channel};
 
 use audio::{DeckTelemetry, Engine, Sender};
-use control::{DeckCommand, DeckId, MusicalKey, TrackAnalysis, TrackBuffer};
+use control::{DeckCommand, DeckId, MusicalKey, TrackBuffer};
 use eframe::egui;
 use egui::{Color32, Pos2, Sense, Stroke, Vec2};
 use persistence::{AnalysisCache, CachedAnalysis, Favourites};
 
+pub(crate) use auto_mix::{
+    AutoMixController, AutoMixShared, AutoMixState, ArmedState, DeckMeta, spawn_load_worker,
+};
+
+fn snapshot_into(d: &DeckUi, m: &mut DeckMeta) {
+    m.loaded_path = d.loaded_path.clone();
+    m.bpm = d.bpm;
+    m.beat_grid = d.beat_grid.clone();
+    m.downbeats = d.downbeats.clone();
+    m.total_frames = d.total_frames;
+    m.sample_rate = d.sample_rate;
+    m.key = d.key;
+}
+
 const SUPPORTED_EXTS: &[&str] = &["mp3", "flac", "wav", "m4a", "aac", "ogg"];
-const OVERVIEW_BUCKETS: usize = 2000;
+pub(crate) const OVERVIEW_BUCKETS: usize = 2000;
 /// Hi-res peaks density (peaks per source-sample). Smaller = more memory but
 /// finer resolution in the scrolling view. 64 ≈ 690 peaks/sec at 44.1k.
-const HIRES_SAMPLES_PER_PEAK: usize = 64;
+pub(crate) const HIRES_SAMPLES_PER_PEAK: usize = 64;
 const PITCH_MIN: f32 = 0.92;
 const PITCH_MAX: f32 = 1.08;
 const ZOOM_BEATS: f64 = 16.0;
@@ -197,11 +212,11 @@ struct SortState {
     ascending: bool,
 }
 
-fn compute_overview(buf: &TrackBuffer, num_buckets: usize) -> Vec<f32> {
+pub(crate) fn compute_overview(buf: &TrackBuffer, num_buckets: usize) -> Vec<f32> {
     compute_overview_from(&buf.samples, buf.channels, num_buckets)
 }
 
-fn compute_overview_from(samples: &[f32], channels: u16, num_buckets: usize) -> Vec<f32> {
+pub(crate) fn compute_overview_from(samples: &[f32], channels: u16, num_buckets: usize) -> Vec<f32> {
     let ch = channels.max(1) as usize;
     let total = samples.len() / ch;
     if total == 0 {
@@ -230,11 +245,11 @@ fn compute_overview_from(samples: &[f32], channels: u16, num_buckets: usize) -> 
         .collect()
 }
 
-fn compute_hires_peaks(buf: &TrackBuffer, samples_per_peak: usize) -> Vec<f32> {
+pub(crate) fn compute_hires_peaks(buf: &TrackBuffer, samples_per_peak: usize) -> Vec<f32> {
     compute_hires_peaks_from(&buf.samples, buf.channels, samples_per_peak)
 }
 
-fn compute_hires_peaks_from(samples: &[f32], channels: u16, samples_per_peak: usize) -> Vec<f32> {
+pub(crate) fn compute_hires_peaks_from(samples: &[f32], channels: u16, samples_per_peak: usize) -> Vec<f32> {
     let ch = channels.max(1) as usize;
     let total = samples.len() / ch;
     if total == 0 || samples_per_peak == 0 {
@@ -260,7 +275,7 @@ fn compute_hires_peaks_from(samples: &[f32], channels: u16, samples_per_peak: us
     out
 }
 
-enum LoadEvent {
+pub(crate) enum LoadEvent {
     /// First message after decode + waveform compute. Carries the
     /// `path` so the deck can identify any subsequent `Refined`.
     /// Beats/downbeats may be empty when the track wasn't cached and
@@ -277,43 +292,43 @@ enum LoadEvent {
     Stems(StemPeaks),
 }
 
-struct LoadInitial {
-    deck: DeckId,
-    path: PathBuf,
-    title: String,
-    overview: Vec<f32>,
-    hires: Vec<f32>,
-    samples_per_hires: usize,
-    total_frames: u64,
-    sample_rate: u32,
-    bpm: f32,
-    beat_grid: Vec<f64>,
-    downbeats: Vec<u32>,
-    key: Option<MusicalKey>,
+pub(crate) struct LoadInitial {
+    pub(crate) deck: DeckId,
+    pub(crate) path: PathBuf,
+    pub(crate) title: String,
+    pub(crate) overview: Vec<f32>,
+    pub(crate) hires: Vec<f32>,
+    pub(crate) samples_per_hires: usize,
+    pub(crate) total_frames: u64,
+    pub(crate) sample_rate: u32,
+    pub(crate) bpm: f32,
+    pub(crate) beat_grid: Vec<f64>,
+    pub(crate) downbeats: Vec<u32>,
+    pub(crate) key: Option<MusicalKey>,
 }
 
-struct AnalysisRefined {
-    deck: DeckId,
-    path: PathBuf,
-    bpm: f32,
-    beat_grid: Vec<f64>,
-    downbeats: Vec<u32>,
-    key: Option<MusicalKey>,
+pub(crate) struct AnalysisRefined {
+    pub(crate) deck: DeckId,
+    pub(crate) path: PathBuf,
+    pub(crate) bpm: f32,
+    pub(crate) beat_grid: Vec<f64>,
+    pub(crate) downbeats: Vec<u32>,
+    pub(crate) key: Option<MusicalKey>,
 }
 
-struct StemPeaks {
-    deck: DeckId,
-    path: PathBuf,
+pub(crate) struct StemPeaks {
+    pub(crate) deck: DeckId,
+    pub(crate) path: PathBuf,
     /// Stems audio. Routed through the UI's drain loop (gated on
     /// `path` matching the deck's current track) so the engine never
     /// gets stems for a track the user already moved on from.
-    stems: Arc<control::TrackStems>,
-    overview_drums: Vec<f32>,
-    overview_vocals: Vec<f32>,
-    overview_instr: Vec<f32>,
-    hires_drums: Vec<f32>,
-    hires_vocals: Vec<f32>,
-    hires_instr: Vec<f32>,
+    pub(crate) stems: Arc<control::TrackStems>,
+    pub(crate) overview_drums: Vec<f32>,
+    pub(crate) overview_vocals: Vec<f32>,
+    pub(crate) overview_instr: Vec<f32>,
+    pub(crate) hires_drums: Vec<f32>,
+    pub(crate) hires_vocals: Vec<f32>,
+    pub(crate) hires_instr: Vec<f32>,
 }
 
 struct DeckUi {
@@ -416,64 +431,11 @@ pub struct DjApp {
     /// in the top bar. Maintained locally; sent to the engine on change.
     cue_gain: f32,
     cue_mix: f32,
-    /// Auto-mix mode — `Off` is the resting state; `Armed` means the
-    /// user clicked the button and we're waiting for the playing
-    /// track to approach its end; `Active` is the 32-beat blend in
-    /// flight. After a blend completes, state returns to `Armed`, so
-    /// turning auto-mix on loops indefinitely (a track gets mixed in
-    /// every ~3-4 minutes until the filtered list is exhausted or the
-    /// user clicks the button again).
-    auto_mix: AutoMixState,
-}
-
-enum AutoMixState {
-    Off,
-    Armed(ArmedState),
-    Active(AutoMixActive),
-}
-
-#[derive(Default)]
-struct ArmedState {
-    /// Path of the track we asked to be pre-loaded onto the idle deck.
-    /// Suppresses duplicate loads while the load is in flight; cleared
-    /// once the deck reports the matching `loaded_path`.
-    pre_load_pending: Option<PathBuf>,
-    /// OUT-deck playhead at the last status heartbeat. Used to throttle
-    /// the "watching, X beats remaining" log.
-    last_status_log: Option<f64>,
-    /// Set when `maybe_start_idle` has already fired a Play command for
-    /// this "no playing deck" event. Cleared as soon as a deck reports
-    /// playing again. Prevents the per-frame Play+force-preload loop
-    /// that happens when an exhausted deck's playhead is past end and
-    /// the engine immediately flips playing=false again.
-    recovery_attempted: bool,
-}
-
-/// Active auto-mix between two decks. Holds enough state to drive the
-/// next per-frame tick without re-querying.
-struct AutoMixActive {
-    /// Currently-playing deck (whose audio we're fading out of).
-    out_deck: DeckId,
-    /// Other deck — the one with the freshly-loaded incoming track.
-    in_deck: DeckId,
-    /// Path of the incoming track. Used to detect "in deck has the
-    /// expected track loaded" once the async load completes.
-    in_path: PathBuf,
-    /// True once we've sent `Sync` for this mix (which has to happen
-    /// AFTER the in deck's analysis is available on the engine side).
-    sync_sent: bool,
-    phase: MixPhase,
-}
-
-enum MixPhase {
-    /// Waiting for the incoming track to finish loading + arming the
-    /// start time at the OUT deck's next 16-beat red line.
-    Cueing,
-    /// 16 beats of "bring IN deck up to volume, drums still off".
-    PhaseA { start_t: f64, end_t: f64 },
-    /// 16 beats of "fade OUT deck down to silence after the drum
-    /// swap that happens at start_t".
-    PhaseC { start_t: f64, end_t: f64 },
+    /// Auto-mix shared state, owned by the background controller thread
+    /// AND read/written by the UI thread (button toggle, drain_loads
+    /// meta sync, picker sync, user-touch cancel). See `auto_mix`
+    /// module for the full state machine.
+    auto_mix: Arc<Mutex<AutoMixShared>>,
 }
 
 impl DjApp {
@@ -505,6 +467,24 @@ impl DjApp {
             Arc::clone(&analysis_progress),
         );
 
+        let auto_mix = Arc::new(Mutex::new(AutoMixShared::new()));
+        // Spawn the auto-mix controller thread. It polls `auto_mix`
+        // shared state at 20 Hz and drives blends entirely independent
+        // of the UI thread, so it keeps working when the egui window
+        // is on another Wayland workspace and not receiving frames.
+        let telemetry_a = engine.telemetry(DeckId::A);
+        let telemetry_b = engine.telemetry(DeckId::B);
+        AutoMixController {
+            shared: Arc::clone(&auto_mix),
+            sender: sender.clone(),
+            telemetry_a,
+            telemetry_b,
+            load_tx: load_tx.clone(),
+            analysis_cache: Arc::clone(&analysis_cache),
+            stem_cache: stem_cache.as_ref().map(Arc::clone),
+        }
+        .spawn();
+
         Self {
             engine,
             sender,
@@ -530,17 +510,12 @@ impl DjApp {
             },
             cue_gain: 0.15,
             cue_mix: 1.0,
-            auto_mix: AutoMixState::Off,
+            auto_mix,
         }
     }
     #[inline]
     fn auto_mix_label(&self) -> &'static str {
-        match &self.auto_mix {
-            AutoMixState::Off => "🔁 Auto-mix",
-            AutoMixState::Armed(s) if s.pre_load_pending.is_some() => "🔁 Auto-mix (loading)",
-            AutoMixState::Armed(_) => "🔁 Auto-mix (armed)",
-            AutoMixState::Active(_) => "🔁 Auto-mix (mixing)",
-        }
+        self.auto_mix.lock().unwrap().label()
     }
 
     fn deck_mut(&mut self, deck: DeckId) -> &mut DeckUi {
@@ -557,192 +532,14 @@ impl DjApp {
             .unwrap_or_default();
         self.deck_mut(deck).loading = true;
         self.deck_mut(deck).title = Some(format!("loading: {name}"));
-        let tx = self.load_tx.clone();
-        let sender = self.sender.clone();
-        let cache = Arc::clone(&self.analysis_cache);
-        let stem_cache = self.stem_cache.as_ref().map(Arc::clone);
-        std::thread::spawn(move || {
-            let buffer = match decode::load_to_buffer(&path) {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("decode {} failed: {e}", path.display());
-                    return;
-                }
-            };
-            let overview = compute_overview(&buffer, OVERVIEW_BUCKETS);
-            let hires = compute_hires_peaks(&buffer, HIRES_SAMPLES_PER_PEAK);
-            let total_frames = buffer.frames() as u64;
-            let sample_rate = buffer.sample_rate;
-            let duration_secs = buffer.duration_secs();
-
-            // Fast path: if the track is cached at v2 (or any version
-            // we accept), use that and skip the slow analyser. The
-            // worker thread will eventually upgrade legacy entries.
-            let cached = cache.get(&path);
-            let (initial_bpm, initial_beats, initial_downbeats, initial_key) =
-                if let Some(c) = cached.as_ref() {
-                    (c.bpm, c.beats.clone(), c.downbeats.clone(), c.key)
-                } else {
-                    // No cache — load the track with an empty grid so
-                    // the user can start playing immediately. Slow
-                    // path below fills in the real analysis.
-                    (0.0, Vec::new(), Vec::new(), None)
-                };
-            let initial_analysis = Arc::new(TrackAnalysis {
-                analysis_version: cached.as_ref().map(|c| c.version).unwrap_or(0),
-                bpm: initial_bpm,
-                beat_grid: initial_beats.clone(),
-                downbeats: initial_downbeats.clone(),
-                duration_secs,
-                sample_rate,
-                key: initial_key,
-            });
-
-            let _ = sender.send(DeckCommand::LoadTrack {
-                deck,
-                buffer: Arc::clone(&buffer),
-                analysis: initial_analysis,
-            });
-            let _ = tx.send(LoadEvent::Initial(LoadInitial {
-                deck,
-                path: path.clone(),
-                title: name,
-                overview,
-                hires,
-                samples_per_hires: HIRES_SAMPLES_PER_PEAK,
-                total_frames,
-                sample_rate,
-                bpm: initial_bpm,
-                beat_grid: initial_beats,
-                downbeats: initial_downbeats,
-                key: initial_key,
-            }));
-
-            // Stem-separation worker. Runs in parallel with the
-            // analysis slow path — orthogonal jobs, both background.
-            // When it lands, push `SetStems` to the audio engine; the
-            // mixer swaps the deck's stem buffers in place without
-            // touching playhead / play state.
-            if let Some(sc) = stem_cache {
-                let path_s = path.clone();
-                let sender_s = sender.clone();
-                let tx_s = tx.clone();
-                std::thread::spawn(move || {
-                    unsafe {
-                        libc::setpriority(libc::PRIO_PROCESS, 0, 10);
-                    }
-                    match sc.separate(&path_s) {
-                        Ok(stems) => {
-                            // Compute peaks BEFORE handing the stems
-                            // off to the engine so we can borrow them
-                            // without contention. The "instruments"
-                            // peak track sums bass + other for
-                            // visualisation, matching the mixer's
-                            // (bass + other) * gain_instruments
-                            // routing.
-                            let instr_buf: Vec<f32> = stems
-                                .bass
-                                .iter()
-                                .zip(stems.other.iter())
-                                .map(|(b, o)| b + o)
-                                .collect();
-                            let ch = stems.channels;
-                            let stems_peaks = StemPeaks {
-                                deck,
-                                path: path_s.clone(),
-                                stems: Arc::clone(&stems),
-                                overview_drums: compute_overview_from(
-                                    &stems.drums,
-                                    ch,
-                                    OVERVIEW_BUCKETS,
-                                ),
-                                overview_vocals: compute_overview_from(
-                                    &stems.bass,
-                                    ch,
-                                    OVERVIEW_BUCKETS,
-                                ),
-                                overview_instr: compute_overview_from(
-                                    &instr_buf,
-                                    ch,
-                                    OVERVIEW_BUCKETS,
-                                ),
-                                hires_drums: compute_hires_peaks_from(
-                                    &stems.drums,
-                                    ch,
-                                    HIRES_SAMPLES_PER_PEAK,
-                                ),
-                                hires_vocals: compute_hires_peaks_from(
-                                    &stems.bass,
-                                    ch,
-                                    HIRES_SAMPLES_PER_PEAK,
-                                ),
-                                hires_instr: compute_hires_peaks_from(
-                                    &instr_buf,
-                                    ch,
-                                    HIRES_SAMPLES_PER_PEAK,
-                                ),
-                            };
-                            // Don't push SetStems to the engine here —
-                            // drain_loads validates the path against
-                            // the deck's current track before
-                            // forwarding, closing the race where a
-                            // slow demucs job lands after the user
-                            // has moved on to another track.
-                            drop(stems);
-                            let _ = sender_s; // unused; kept for symmetry
-                            let _ = tx_s.send(LoadEvent::Stems(stems_peaks));
-                        }
-                        Err(e) => eprintln!("stems: {} failed: {e:#}", path_s.display()),
-                    }
-                });
-            }
-
-            // Slow path: if we didn't have a cache hit, run the full
-            // analyser in the background. Once it lands, push the
-            // refined grid to both audio engine + UI.
-            if cached.is_none() {
-                let cache_slow = Arc::clone(&cache);
-                let sender_slow = sender.clone();
-                let tx_slow = tx.clone();
-                std::thread::spawn(move || {
-                    // Same priority drop as the background scan
-                    // worker — don't fight the audio callback.
-                    unsafe {
-                        libc::setpriority(libc::PRIO_PROCESS, 0, 10);
-                    }
-                    let r = analysis::analyse(&buffer);
-                    let entry = CachedAnalysis {
-                        bpm: r.bpm,
-                        key: r.key,
-                        beats: r.beat_grid.clone(),
-                        downbeats: r.downbeats.clone(),
-                        version: r.analysis_version,
-                    };
-                    cache_slow.insert(path.clone(), entry);
-                    let refined = Arc::new(TrackAnalysis {
-                        analysis_version: r.analysis_version,
-                        bpm: r.bpm,
-                        beat_grid: r.beat_grid.clone(),
-                        downbeats: r.downbeats.clone(),
-                        duration_secs,
-                        sample_rate,
-                        key: r.key,
-                    });
-                    let _ = sender_slow.send(DeckCommand::UpdateAnalysis {
-                        deck,
-                        analysis: refined,
-                    });
-                    let _ = tx_slow.send(LoadEvent::Refined(AnalysisRefined {
-                        deck,
-                        path,
-                        bpm: r.bpm,
-                        beat_grid: r.beat_grid,
-                        downbeats: r.downbeats,
-                        key: r.key,
-                    }));
-                });
-            }
-        });
+        spawn_load_worker(
+            path,
+            deck,
+            self.sender.clone(),
+            self.load_tx.clone(),
+            Arc::clone(&self.analysis_cache),
+            self.stem_cache.as_ref().map(Arc::clone),
+        );
     }
 
     fn render_track_table(&mut self, ui: &mut egui::Ui) {
@@ -968,6 +765,7 @@ impl DjApp {
     }
 
     fn drain_loads(&mut self) {
+        let mut meta_changed = false;
         while let Ok(event) = self.load_rx.try_recv() {
             match event {
                 LoadEvent::Initial(res) => {
@@ -994,6 +792,7 @@ impl DjApp {
                     d.downbeats = res.downbeats;
                     d.key = res.key;
                     d.loading = false;
+                    meta_changed = true;
                 }
                 LoadEvent::Refined(r) => {
                     // Drop the refined result if the user has already
@@ -1006,6 +805,7 @@ impl DjApp {
                     d.beat_grid = r.beat_grid;
                     d.downbeats = r.downbeats;
                     d.key = r.key;
+                    meta_changed = true;
                 }
                 LoadEvent::Stems(s) => {
                     let d = self.deck_mut(s.deck);
@@ -1036,568 +836,106 @@ impl DjApp {
                 }
             }
         }
-    }
-
-    /// Turn auto-mix ON. Sets state to `Armed` and waits for the
-    /// playing track to approach its end before triggering a blend.
-    /// The mode stays on across mixes — each completed blend loops
-    /// back to Armed so the next track gets mixed in too.
-    fn arm_auto_mix(&mut self) {
-        eprintln!("auto-mix: armed — pre-loading next track on idle deck");
-        self.auto_mix = AutoMixState::Armed(ArmedState::default());
-        // Kick off the pre-load straight away so analysis + stems are
-        // ready by the time we actually need to blend.
-        self.maybe_preload_next();
-    }
-
-    /// Turn auto-mix OFF entirely. If a blend is in flight, abort
-    /// it and release the knobs. Called by the button (toggle off)
-    /// and by any manual user input during an active mix.
-    fn disarm_auto_mix(&mut self) {
-        let prev = std::mem::replace(&mut self.auto_mix, AutoMixState::Off);
-        match prev {
-            AutoMixState::Off => {}
-            AutoMixState::Armed(_) => {
-                eprintln!("auto-mix: disarmed");
-            }
-            AutoMixState::Active(active) => {
-                eprintln!("auto-mix: cancelled (mid-blend)");
-                // Restore the OUT deck to full audio (in case we're
-                // mid PhaseC fade) and zero the IN deck (in case
-                // we're mid PhaseA ramp-up).
-                let _ = self
-                    .sender
-                    .send(DeckCommand::SetGain { deck: active.in_deck, gain: 0.0 });
-                let _ = self
-                    .sender
-                    .send(DeckCommand::SetStemDrums { deck: active.in_deck, gain: 1.0 });
-                let _ = self
-                    .sender
-                    .send(DeckCommand::SetGain { deck: active.out_deck, gain: 1.0 });
-                let _ = self
-                    .sender
-                    .send(DeckCommand::SetStemDrums { deck: active.out_deck, gain: 1.0 });
-            }
+        if meta_changed {
+            self.sync_auto_mix_meta();
         }
     }
 
-    /// Called from `cancel_auto_mix` used by user-touch detection.
-    /// Same behaviour as `disarm_auto_mix` — go all the way to Off
-    /// when the user touches anything during a blend.
-    fn cancel_auto_mix(&mut self) {
-        if matches!(self.auto_mix, AutoMixState::Active(_)) {
-            self.disarm_auto_mix();
-        }
+    /// Mirror DeckUi.{loaded_path, bpm, beat_grid, downbeats, total_frames,
+    /// sample_rate, key} into the auto-mix controller's shared state so
+    /// the controller (which doesn't hold a reference to DeckUi) can see
+    /// the current track metadata.
+    fn sync_auto_mix_meta(&self) {
+        let mut s = self.auto_mix.lock().unwrap();
+        snapshot_into(&self.deck_a, &mut s.meta_a);
+        snapshot_into(&self.deck_b, &mut s.meta_b);
     }
 
-    /// Begin an active blend on a specific OUT deck. Uses whatever
-    /// track is already loaded on the IN deck (pre-loaded by
-    /// `maybe_preload_next`) — that way analysis + stems are ready by
-    /// the time we get here. Returns false if the IN deck doesn't
-    /// have a track yet (state stays Armed; tick will retry).
-    fn begin_active_mix(&mut self, out_deck: DeckId) -> bool {
-        let in_deck = match out_deck {
-            DeckId::A => DeckId::B,
-            DeckId::B => DeckId::A,
-        };
-        let in_d = self.deck_for(in_deck);
-        let Some(in_path) = in_d.loaded_path.clone() else {
-            // Pre-load hasn't landed yet. Stay armed; retry next tick.
-            return false;
-        };
-        if in_d.beat_grid.is_empty() {
-            // Track loaded but analysis still in flight.
-            return false;
-        }
-        eprintln!(
-            "auto-mix: triggering blend out={:?} in={:?} → {}",
-            out_deck,
-            in_deck,
-            in_path.file_name().and_then(|s| s.to_str()).unwrap_or("?")
-        );
-        // Mute the incoming deck so PhaseA can ramp it up from zero.
-        // (Stems were already muted by maybe_preload_next.)
-        let _ = self.sender.send(DeckCommand::SetGain {
-            deck: in_deck,
-            gain: 0.0,
-        });
-        let _ = self.sender.send(DeckCommand::SetStemDrums {
-            deck: in_deck,
-            gain: 0.0,
-        });
-        self.auto_mix = AutoMixState::Active(AutoMixActive {
-            out_deck,
-            in_deck,
-            in_path,
-            sync_sent: false,
-            phase: MixPhase::Cueing,
-        });
-        true
-    }
-
-    /// If we're Armed and the non-playing deck is empty, pre-load a
-    /// candidate track onto it so it has time to decode + analyse +
-    /// compute stems before we actually need to blend.
-    fn maybe_preload_next(&mut self) {
-        let AutoMixState::Armed(_) = &self.auto_mix else { return };
-        let playing_a = self.deck_a.telemetry.is_playing();
-        let playing_b = self.deck_b.telemetry.is_playing();
-        // Idle deck = the one NOT currently playing. If both or
-        // neither are playing we don't know which side is OUT yet —
-        // wait for clearer state.
-        let idle_deck = if playing_a && !playing_b {
-            DeckId::B
-        } else if playing_b && !playing_a {
-            DeckId::A
-        } else {
-            return;
-        };
-        let idle_loaded = self.deck_for(idle_deck).loaded_path.clone();
-        if idle_loaded.is_some() {
-            // Update the pending-tracker: if this is the track we
-            // asked for, clear pending. If it's a different track,
-            // the user (or post-blend logic) loaded it — respect it.
-            if let AutoMixState::Armed(s) = &mut self.auto_mix {
-                if s.pre_load_pending == idle_loaded {
-                    s.pre_load_pending = None;
-                }
-            }
-            return;
-        }
-        // A load is in flight — wait for it to land.
-        if let AutoMixState::Armed(s) = &self.auto_mix {
-            if s.pre_load_pending.is_some() {
-                return;
-            }
-        }
-        self.force_preload_on(idle_deck);
-    }
-
-    /// Pick a candidate and load it onto a specific deck regardless
-    /// of what's already there. Used right after a blend completes
-    /// to replace the just-finished OUT track on the now-paused deck.
-    fn force_preload_on(&mut self, deck: DeckId) {
-        let Some(path) = self.pick_random_next_track() else {
-            eprintln!("auto-mix: no candidate to pre-load");
-            return;
-        };
-        eprintln!(
-            "auto-mix: pre-loading {} on {:?}",
-            path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
-            deck
-        );
-        let _ = self.sender.send(DeckCommand::SetGain { deck, gain: 0.0 });
-        let _ = self.sender.send(DeckCommand::SetStemDrums { deck, gain: 0.0 });
-        self.start_load(path.clone(), deck);
-        if let AutoMixState::Armed(s) = &mut self.auto_mix {
-            s.pre_load_pending = Some(path);
-        }
-    }
-
-    /// Apply the current filter + sort (same logic as the track table)
-    /// and return a random path that isn't currently loaded on either
-    /// deck. None if no candidates remain.
-    fn pick_random_next_track(&self) -> Option<PathBuf> {
-        let filter_lower = self.filter.to_lowercase();
+    /// Mirror the track-picker inputs (filter/favs/genre/harmonic key)
+    /// into the auto-mix shared state. Called each frame so the
+    /// controller picks tracks consistent with what's on screen.
+    fn sync_auto_mix_picker(&self) {
         let target_key = match self.harmonic_filter {
             Some(DeckId::A) => self.deck_a.key,
             Some(DeckId::B) => self.deck_b.key,
             None => None,
         };
-        let harmonic_active = self.harmonic_filter.is_some() && target_key.is_some();
-        let now_a = self.deck_a.loaded_path.clone();
-        let now_b = self.deck_b.loaded_path.clone();
-
-        let candidates: Vec<&PathBuf> = self
-            .tracks
-            .iter()
-            .filter(|m| {
-                if Some(&m.path) == now_a.as_ref() || Some(&m.path) == now_b.as_ref() {
-                    return false;
-                }
-                if self.favourites_only && !self.favourites.contains(&m.path) {
-                    return false;
-                }
-                if !filter_lower.is_empty() {
-                    let hit = m.title.to_lowercase().contains(&filter_lower)
-                        || m.artist.to_lowercase().contains(&filter_lower)
-                        || m.filename.to_lowercase().contains(&filter_lower);
-                    if !hit {
-                        return false;
-                    }
-                }
-                if let Some(g) = self.genre_filter.as_deref() {
-                    if !m.genre.eq_ignore_ascii_case(g) {
-                        return false;
-                    }
-                }
-                if harmonic_active {
-                    let t = target_key.unwrap();
-                    let Some(c) = self.analysis_cache.get(&m.path) else {
-                        return false;
-                    };
-                    let Some(k) = c.key else {
-                        return false;
-                    };
-                    if !persistence::camelot_compatible(t, k) {
-                        return false;
-                    }
-                }
-                true
-            })
-            .map(|m| &m.path)
-            .collect();
-        if candidates.is_empty() {
-            return None;
+        let mut s = self.auto_mix.lock().unwrap();
+        s.filter_lower = self.filter.to_lowercase();
+        s.favourites_only = self.favourites_only;
+        s.genre_filter = self.genre_filter.clone();
+        s.harmonic_target_key = target_key;
+        // tracks/favourites mirroring is best-effort: only re-sync the
+        // Arc<Vec> when the underlying length or first/last paths
+        // differ from what's already shared (cheap probe; full sync is
+        // not free with thousands of tracks).
+        let need_tracks_resync = s.tracks.len() != self.tracks.len()
+            || s.tracks.first().map(|t| &t.path) != self.tracks.first().map(|t| &t.path)
+            || s.tracks.last().map(|t| &t.path) != self.tracks.last().map(|t| &t.path);
+        if need_tracks_resync {
+            s.tracks = Arc::new(self.tracks.clone());
         }
-        // Cheap PRNG seeded from the OUT deck's playhead — gives
-        // different picks across sessions without an OS time call.
-        let seed = self.deck_a.telemetry.playhead_frames()
-            ^ self.deck_b.telemetry.playhead_frames()
-            ^ (candidates.len() as u64).wrapping_mul(0x9e3779b97f4a7c15);
-        let idx = (seed.wrapping_mul(0xbf58476d1ce4e5b9) >> 32) as usize % candidates.len();
-        Some(candidates[idx].clone())
-    }
-
-    /// Drive the auto-mix state machine forward by one tick. Called
-    /// each frame from `update`.
-    ///
-    /// - `Off`: no-op.
-    /// - `Armed`: watch the playing deck; when it's within ~48 beats
-    ///   of its end (16 beat lookahead + 32 beat blend) start a blend
-    ///   by loading + cueing the next track.
-    /// - `Active`: ramp gain / swap drums per phase. On completion,
-    ///   return to `Armed` so the loop continues.
-    fn tick_auto_mix(&mut self) {
-        match self.auto_mix {
-            AutoMixState::Off => {}
-            AutoMixState::Armed(_) => self.tick_armed(),
-            AutoMixState::Active(_) => self.tick_active(),
+        if s.favourites.len() != self.favourites.paths().len() {
+            s.favourites = Arc::new(self.favourites.paths().clone());
         }
     }
 
-    fn tick_armed(&mut self) {
-        let playing_a = self.deck_a.telemetry.is_playing();
-        let playing_b = self.deck_b.telemetry.is_playing();
-        // A deck is playing → recovery is no longer in flight. Clear
-        // the flag so the next end-of-track event can trigger recovery
-        // again.
-        if playing_a || playing_b {
-            if let AutoMixState::Armed(s) = &mut self.auto_mix {
-                if s.recovery_attempted {
-                    s.recovery_attempted = false;
+    /// Toggle auto-mix. Off → Armed; Armed/Active → Off (resetting
+    /// any in-flight blend's deck volumes). Pre-load on entering
+    /// Armed is handled by the controller's next tick (~50 ms later).
+    fn toggle_auto_mix(&mut self) {
+        // Snapshot of any in-flight mix that we need to clean up
+        // commands for before flipping the state to Off.
+        let cleanup = {
+            let mut s = self.auto_mix.lock().unwrap();
+            match &s.state {
+                AutoMixState::Off => {
+                    eprintln!("auto-mix: armed — controller will pre-load next track");
+                    s.state = AutoMixState::Armed(ArmedState::default());
+                    None
+                }
+                AutoMixState::Armed(_) => {
+                    eprintln!("auto-mix: disarmed");
+                    s.state = AutoMixState::Off;
+                    None
+                }
+                AutoMixState::Active(active) => {
+                    eprintln!("auto-mix: cancelled (user toggled mid-blend)");
+                    let cleanup = (active.in_deck, active.out_deck);
+                    s.state = AutoMixState::Off;
+                    Some(cleanup)
                 }
             }
-        }
-        let out_deck = if playing_a && !playing_b {
-            DeckId::A
-        } else if playing_b && !playing_a {
-            DeckId::B
-        } else if !playing_a && !playing_b {
-            // No deck is playing — either initial state or the playing
-            // track ran past its end before our 48-beat trigger fired
-            // (engine sets deck.playing=false at end of buffer). If we
-            // already have a track loaded with analysis, just start it.
-            // No blend possible — there's nothing to fade out of.
-            self.maybe_start_idle();
-            return;
-        } else {
-            // Both playing — shouldn't happen in Armed; an Active mix
-            // would catch this. Wait.
-            return;
         };
-        let out_d = self.deck_for(out_deck);
-        let bpm = out_d.bpm;
-        if bpm <= 0.0 || out_d.beat_grid.is_empty() || out_d.total_frames == 0 || out_d.sample_rate == 0 {
-            // Pre-load the next track even while we wait for the
-            // playing deck's analysis to land.
-            self.maybe_preload_next();
-            return;
+        if let Some((in_deck, out_deck)) = cleanup {
+            let _ = self.sender.send(DeckCommand::SetGain { deck: in_deck, gain: 0.0 });
+            let _ = self.sender.send(DeckCommand::SetStemDrums { deck: in_deck, gain: 1.0 });
+            let _ = self.sender.send(DeckCommand::SetGain { deck: out_deck, gain: 1.0 });
+            let _ = self.sender.send(DeckCommand::SetStemDrums { deck: out_deck, gain: 1.0 });
         }
-        let total_secs = out_d.total_frames as f64 / out_d.sample_rate as f64;
-        let out_t = out_d.playhead_secs();
-        let remaining = total_secs - out_t;
-        // Always poll for pre-load — handles initial arm, blend
-        // completion, and the case where the user cleared the idle
-        // deck manually. Cheap when nothing changed.
-        self.maybe_preload_next();
-        // 48 beats of headroom: up to 16 beats waiting for the next
-        // red line, then 32 beats of blend. Trigger when remaining
-        // drops below that.
-        let bar_secs = 60.0 / bpm as f64;
-        let trigger_at = 48.0 * bar_secs;
-        // Heartbeat: log roughly every 30 s of OUT progress so the
-        // user can see the watch is alive while waiting for the end
-        // of the track.
-        let should_log = match &self.auto_mix {
-            AutoMixState::Armed(s) => s
-                .last_status_log
-                .map(|prev| (out_t - prev).abs() > 30.0)
-                .unwrap_or(true),
-            _ => false,
-        };
-        if should_log {
-            let beats_remaining = (remaining / bar_secs).round() as i64;
-            let in_deck = match out_deck { DeckId::A => DeckId::B, DeckId::B => DeckId::A };
-            let in_d = self.deck_for(in_deck);
-            let in_state = match (&in_d.loaded_path, in_d.beat_grid.is_empty()) {
-                (None, _) => "idle deck empty".to_string(),
-                (Some(p), true) => format!(
-                    "idle deck loading {}",
-                    p.file_name().and_then(|s| s.to_str()).unwrap_or("?")
-                ),
-                (Some(p), false) => format!(
-                    "idle deck ready: {}",
-                    p.file_name().and_then(|s| s.to_str()).unwrap_or("?")
-                ),
-            };
-            eprintln!(
-                "auto-mix: watching {:?} — {:.0}s ({} beats) until blend, {}",
-                out_deck, remaining, beats_remaining, in_state
-            );
-            if let AutoMixState::Armed(s) = &mut self.auto_mix {
-                s.last_status_log = Some(out_t);
-            }
-        }
-        if remaining > trigger_at {
-            return;
-        }
-        // Trigger window — try to begin a blend. Log every attempt so
-        // silent bails (IN deck not ready yet) are visible. Once we
-        // succeed begin_active_mix sets state to Active and we won't
-        // be back here until the blend completes.
-        let in_deck = match out_deck { DeckId::A => DeckId::B, DeckId::B => DeckId::A };
-        let in_d = self.deck_for(in_deck);
-        if in_d.loaded_path.is_none() {
-            eprintln!("auto-mix: trigger fired but idle deck has no track — skipping blend");
-            return;
-        }
-        if in_d.beat_grid.is_empty() {
-            eprintln!("auto-mix: trigger fired but idle deck still analysing — waiting");
-            return;
-        }
-        eprintln!(
-            "auto-mix: trigger fired — {:.0}s ({} beats) remaining on {:?}",
-            remaining,
-            (remaining / bar_secs).round() as i64,
-            out_deck
-        );
-        self.begin_active_mix(out_deck);
     }
 
-    /// Neither deck is playing but we want to keep the auto-mix loop
-    /// alive. Picks the FRESH deck (playhead not at end-of-track) and
-    /// starts it. The exhausted deck — the one whose playhead is past
-    /// its total — is excluded; calling Play on it just bounces the
-    /// engine's playing flag every frame.
-    ///
-    /// Guarded by `recovery_attempted` so we only fire once per
-    /// "no playing deck" event (cleared when a deck starts playing).
-    fn maybe_start_idle(&mut self) {
-        // Already attempted recovery this round — don't hammer.
-        if let AutoMixState::Armed(s) = &self.auto_mix {
-            if s.recovery_attempted {
-                return;
-            }
-        }
-        // Freshness: playhead more than ~2 s before end of track. The
-        // exhausted deck whose track just ended has playhead at total
-        // and would fail this check.
-        let is_fresh = |d: &DeckUi| -> bool {
-            if d.loaded_path.is_none() || d.beat_grid.is_empty() {
-                return false;
-            }
-            if d.total_frames == 0 || d.sample_rate == 0 {
-                return false;
-            }
-            let pos = d.telemetry.playhead_frames();
-            let margin = d.sample_rate as u64 * 2;
-            pos + margin < d.total_frames
-        };
-        let candidate = if is_fresh(&self.deck_a) {
-            Some(DeckId::A)
-        } else if is_fresh(&self.deck_b) {
-            Some(DeckId::B)
-        } else {
-            None
-        };
-        let Some(d) = candidate else {
-            // Nothing fresh to start. Mark attempted so we don't keep
-            // logging — wait for a load to land via maybe_preload_next.
-            if let AutoMixState::Armed(s) = &mut self.auto_mix {
-                s.recovery_attempted = true;
-            }
-            eprintln!(
-                "auto-mix: no fresh deck to start — waiting for pre-load to land"
-            );
-            return;
-        };
-        eprintln!(
-            "auto-mix: no playing deck — starting {:?} ({}) fresh",
-            d,
-            self.deck_for(d)
-                .loaded_path
-                .as_ref()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str())
-                .unwrap_or("?")
-        );
-        // Make sure gain + stems are at full (this deck was muted
-        // earlier when it was pre-loaded).
-        let _ = self.sender.send(DeckCommand::SetGain { deck: d, gain: 1.0 });
-        let _ = self.sender.send(DeckCommand::SetStemDrums { deck: d, gain: 1.0 });
-        let _ = self.sender.send(DeckCommand::Play(d));
-        if let AutoMixState::Armed(s) = &mut self.auto_mix {
-            s.last_status_log = None;
-            s.recovery_attempted = true;
-        }
-        // Queue another candidate on the OTHER deck (the exhausted
-        // one) — start_load replaces its old buffer so it'll become
-        // the next pre-load.
-        let other = match d { DeckId::A => DeckId::B, DeckId::B => DeckId::A };
-        self.force_preload_on(other);
-    }
-
-    fn tick_active(&mut self) {
-        let AutoMixState::Active(active) = &mut self.auto_mix else { return };
-        let out_deck = active.out_deck;
-        let in_deck = active.in_deck;
-        // Snapshot read-only deck state so we don't conflict with
-        // borrows of self.sender / self.auto_mix below.
-        let (out_t, bpm, out_total_secs) = {
-            let d = match out_deck { DeckId::A => &self.deck_a, DeckId::B => &self.deck_b };
-            let total = if d.sample_rate > 0 {
-                d.total_frames as f64 / d.sample_rate as f64
+    /// Called when the user has touched any deck-affecting control
+    /// while a blend was in flight (the orchestrator's own writes go
+    /// through `self.sender` directly and don't set `user_touched`).
+    /// Tears the blend down and restores both decks.
+    fn cancel_auto_mix(&mut self) {
+        let cleanup = {
+            let mut s = self.auto_mix.lock().unwrap();
+            if let AutoMixState::Active(ref active) = s.state {
+                let cleanup = (active.in_deck, active.out_deck);
+                s.state = AutoMixState::Off;
+                Some(cleanup)
             } else {
-                f64::INFINITY
-            };
-            (d.playhead_secs(), d.bpm.clamp(60.0, 220.0), total)
+                None
+            }
         };
-        let (in_loaded_path, in_grid_ready, in_playing) = {
-            let d = match in_deck { DeckId::A => &self.deck_a, DeckId::B => &self.deck_b };
-            (
-                d.loaded_path.clone(),
-                !d.beat_grid.is_empty(),
-                d.telemetry.is_playing(),
-            )
-        };
-        let bar16_secs = 16.0 * 60.0 / bpm as f64;
-
-        match active.phase.clone_for_match() {
-            MixPhase::Cueing => {
-                // Wait for IN deck to actually have its analysis.
-                if in_loaded_path.as_deref() != Some(active.in_path.as_path())
-                    || !in_grid_ready
-                {
-                    return;
-                }
-                // Send Sync NOW — both decks have BPM, so the engine
-                // can actually match. Only once per blend.
-                if !active.sync_sent {
-                    let _ = self.sender.send(DeckCommand::Sync { deck: in_deck });
-                    active.sync_sent = true;
-                }
-                // Find OUT deck's next red line (every-16-beat
-                // downbeat) at least 1 s ahead.
-                let next_mix = {
-                    let d = match out_deck { DeckId::A => &self.deck_a, DeckId::B => &self.deck_b };
-                    d.downbeats
-                        .iter()
-                        .enumerate()
-                        .filter(|(j, _)| j % 4 == 0)
-                        .filter_map(|(_, &i)| d.beat_grid.get(i as usize).copied())
-                        .find(|&t| t > out_t + 1.0)
-                };
-                let Some(mix_t) = next_mix else {
-                    eprintln!("auto-mix: no upcoming red line on out deck — bailing");
-                    self.disarm_auto_mix();
-                    return;
-                };
-                if mix_t + 2.0 * bar16_secs > out_total_secs {
-                    eprintln!("auto-mix: not enough track left for 32-beat blend — bailing");
-                    self.disarm_auto_mix();
-                    return;
-                }
-                eprintln!(
-                    "auto-mix: PhaseA armed — start {:.1}s, drum swap {:.1}s, end {:.1}s",
-                    mix_t,
-                    mix_t + bar16_secs,
-                    mix_t + 2.0 * bar16_secs
-                );
-                active.phase = MixPhase::PhaseA {
-                    start_t: mix_t,
-                    end_t: mix_t + bar16_secs,
-                };
-            }
-            MixPhase::PhaseA { start_t, end_t } => {
-                if !in_playing && out_t >= start_t {
-                    let _ = self.sender.send(DeckCommand::Play(in_deck));
-                }
-                if out_t < start_t {
-                    return;
-                }
-                let frac = ((out_t - start_t) / (end_t - start_t)).clamp(0.0, 1.0) as f32;
-                let _ = self
-                    .sender
-                    .send(DeckCommand::SetGain { deck: in_deck, gain: frac });
-                if out_t >= end_t {
-                    let _ = self
-                        .sender
-                        .send(DeckCommand::SetStemDrums { deck: in_deck, gain: 1.0 });
-                    let _ = self
-                        .sender
-                        .send(DeckCommand::SetStemDrums { deck: out_deck, gain: 0.0 });
-                    active.phase = MixPhase::PhaseC {
-                        start_t: end_t,
-                        end_t: end_t + bar16_secs,
-                    };
-                }
-            }
-            MixPhase::PhaseC { start_t, end_t } => {
-                let frac = ((out_t - start_t) / (end_t - start_t)).clamp(0.0, 1.0) as f32;
-                let _ = self.sender.send(DeckCommand::SetGain {
-                    deck: out_deck,
-                    gain: 1.0 - frac,
-                });
-                if out_t >= end_t {
-                    let _ = self.sender.send(DeckCommand::Pause(out_deck));
-                    // Restore the OUT deck so a future load starts
-                    // from a clean slate.
-                    let _ = self.sender.send(DeckCommand::SetGain {
-                        deck: out_deck,
-                        gain: 1.0,
-                    });
-                    let _ = self.sender.send(DeckCommand::SetStemDrums {
-                        deck: out_deck,
-                        gain: 1.0,
-                    });
-                    eprintln!("auto-mix: blend complete — re-armed for next");
-                    self.auto_mix = AutoMixState::Armed(ArmedState::default());
-                    // The just-paused deck still has the old track
-                    // loaded; force-replace it so the next blend has
-                    // analysis + stems ready well in advance.
-                    self.force_preload_on(out_deck);
-                }
-            }
-        }
-    }
-
-    fn deck_for(&self, d: DeckId) -> &DeckUi {
-        match d {
-            DeckId::A => &self.deck_a,
-            DeckId::B => &self.deck_b,
-        }
-    }
-}
-
-impl MixPhase {
-    /// `Clone` for matching by value; the only fields that exist on
-    /// PhaseA/C are `f64`s so this is a cheap copy.
-    fn clone_for_match(&self) -> MixPhase {
-        match *self {
-            MixPhase::Cueing => MixPhase::Cueing,
-            MixPhase::PhaseA { start_t, end_t } => MixPhase::PhaseA { start_t, end_t },
-            MixPhase::PhaseC { start_t, end_t } => MixPhase::PhaseC { start_t, end_t },
+        if let Some((in_deck, out_deck)) = cleanup {
+            eprintln!("auto-mix: cancelled (user touched control mid-blend)");
+            let _ = self.sender.send(DeckCommand::SetGain { deck: in_deck, gain: 0.0 });
+            let _ = self.sender.send(DeckCommand::SetStemDrums { deck: in_deck, gain: 1.0 });
+            let _ = self.sender.send(DeckCommand::SetGain { deck: out_deck, gain: 1.0 });
+            let _ = self.sender.send(DeckCommand::SetStemDrums { deck: out_deck, gain: 1.0 });
         }
     }
 }
@@ -1605,7 +943,11 @@ impl MixPhase {
 impl eframe::App for DjApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_loads();
-        self.tick_auto_mix();
+        // Sync picker inputs every frame so the controller (which runs
+        // on its own thread) picks tracks consistent with the current
+        // filter/favs/genre/harmonic selection. Auto-mix tick itself
+        // is driven by the controller thread, not the UI.
+        self.sync_auto_mix_picker();
         // Tracks whether any deck-affecting user input fired this
         // frame. Auto-mix aborts at end-of-frame if so. Cell because
         // multiple nested egui closures need to set it.
@@ -1648,10 +990,7 @@ impl eframe::App for DjApp {
                 ui.separator();
                 let auto_btn = ui.button(self.auto_mix_label());
                 if auto_btn.clicked() {
-                    match self.auto_mix {
-                        AutoMixState::Off => self.arm_auto_mix(),
-                        _ => self.disarm_auto_mix(),
-                    }
+                    self.toggle_auto_mix();
                 }
                 ui.separator();
                 if ui.add(egui::Slider::new(&mut self.cue_gain, 0.0..=1.5)
@@ -1801,7 +1140,7 @@ impl eframe::App for DjApp {
         // an in-flight auto-mix. The orchestrator's own gain/drum
         // writes go directly through `self.sender` and never set
         // `user_touched`, so they don't self-cancel.
-        if user_touched.get() && matches!(self.auto_mix, AutoMixState::Active(_)) {
+        if user_touched.get() && self.auto_mix.lock().unwrap().is_active() {
             self.cancel_auto_mix();
         }
     }
