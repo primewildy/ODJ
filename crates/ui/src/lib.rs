@@ -441,6 +441,12 @@ struct ArmedState {
     /// OUT-deck playhead at the last status heartbeat. Used to throttle
     /// the "watching, X beats remaining" log.
     last_status_log: Option<f64>,
+    /// Set when `maybe_start_idle` has already fired a Play command for
+    /// this "no playing deck" event. Cleared as soon as a deck reports
+    /// playing again. Prevents the per-frame Play+force-preload loop
+    /// that happens when an exhausted deck's playhead is past end and
+    /// the engine immediately flips playing=false again.
+    recovery_attempted: bool,
 }
 
 /// Active auto-mix between two decks. Holds enough state to drive the
@@ -1273,6 +1279,16 @@ impl DjApp {
     fn tick_armed(&mut self) {
         let playing_a = self.deck_a.telemetry.is_playing();
         let playing_b = self.deck_b.telemetry.is_playing();
+        // A deck is playing → recovery is no longer in flight. Clear
+        // the flag so the next end-of-track event can trigger recovery
+        // again.
+        if playing_a || playing_b {
+            if let AutoMixState::Armed(s) = &mut self.auto_mix {
+                if s.recovery_attempted {
+                    s.recovery_attempted = false;
+                }
+            }
+        }
         let out_deck = if playing_a && !playing_b {
             DeckId::A
         } else if playing_b && !playing_a {
@@ -1370,18 +1386,52 @@ impl DjApp {
     }
 
     /// Neither deck is playing but we want to keep the auto-mix loop
-    /// alive. If a deck has a ready track loaded (typically the
-    /// pre-loaded next track), start it. Then queue another candidate
-    /// onto the other deck so we're set up for the next blend.
+    /// alive. Picks the FRESH deck (playhead not at end-of-track) and
+    /// starts it. The exhausted deck — the one whose playhead is past
+    /// its total — is excluded; calling Play on it just bounces the
+    /// engine's playing flag every frame.
+    ///
+    /// Guarded by `recovery_attempted` so we only fire once per
+    /// "no playing deck" event (cleared when a deck starts playing).
     fn maybe_start_idle(&mut self) {
-        let candidate = if self.deck_a.loaded_path.is_some() && !self.deck_a.beat_grid.is_empty() {
+        // Already attempted recovery this round — don't hammer.
+        if let AutoMixState::Armed(s) = &self.auto_mix {
+            if s.recovery_attempted {
+                return;
+            }
+        }
+        // Freshness: playhead more than ~2 s before end of track. The
+        // exhausted deck whose track just ended has playhead at total
+        // and would fail this check.
+        let is_fresh = |d: &DeckUi| -> bool {
+            if d.loaded_path.is_none() || d.beat_grid.is_empty() {
+                return false;
+            }
+            if d.total_frames == 0 || d.sample_rate == 0 {
+                return false;
+            }
+            let pos = d.telemetry.playhead_frames();
+            let margin = d.sample_rate as u64 * 2;
+            pos + margin < d.total_frames
+        };
+        let candidate = if is_fresh(&self.deck_a) {
             Some(DeckId::A)
-        } else if self.deck_b.loaded_path.is_some() && !self.deck_b.beat_grid.is_empty() {
+        } else if is_fresh(&self.deck_b) {
             Some(DeckId::B)
         } else {
             None
         };
-        let Some(d) = candidate else { return };
+        let Some(d) = candidate else {
+            // Nothing fresh to start. Mark attempted so we don't keep
+            // logging — wait for a load to land via maybe_preload_next.
+            if let AutoMixState::Armed(s) = &mut self.auto_mix {
+                s.recovery_attempted = true;
+            }
+            eprintln!(
+                "auto-mix: no fresh deck to start — waiting for pre-load to land"
+            );
+            return;
+        };
         eprintln!(
             "auto-mix: no playing deck — starting {:?} ({}) fresh",
             d,
@@ -1392,18 +1442,18 @@ impl DjApp {
                 .and_then(|s| s.to_str())
                 .unwrap_or("?")
         );
-        // Make sure gain + stems are at full (the deck may have been
-        // muted by an earlier pre-load).
+        // Make sure gain + stems are at full (this deck was muted
+        // earlier when it was pre-loaded).
         let _ = self.sender.send(DeckCommand::SetGain { deck: d, gain: 1.0 });
         let _ = self.sender.send(DeckCommand::SetStemDrums { deck: d, gain: 1.0 });
         let _ = self.sender.send(DeckCommand::Play(d));
-        // Reset heartbeat so the user sees the new watch begin from
-        // its initial state.
         if let AutoMixState::Armed(s) = &mut self.auto_mix {
             s.last_status_log = None;
+            s.recovery_attempted = true;
         }
-        // Queue another candidate on the other deck so the next mix
-        // is already in motion.
+        // Queue another candidate on the OTHER deck (the exhausted
+        // one) — start_load replaces its old buffer so it'll become
+        // the next pre-load.
         let other = match d { DeckId::A => DeckId::B, DeckId::B => DeckId::A };
         self.force_preload_on(other);
     }
