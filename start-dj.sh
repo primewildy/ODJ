@@ -15,6 +15,21 @@ SPEAKER_SINK="$(pactl list short sinks 2>/dev/null \
     | awk -F'\t' '/__Speaker__/ { print $2; exit }')"
 UGREEN_SINK="$(pactl list short sinks 2>/dev/null \
     | awk -F'\t' '/KT_USB_Audio|usb-KTMicro/ { print $2; exit }')"
+BLUEZ_SINK="$(pactl list short sinks 2>/dev/null \
+    | awk -F'\t' '/^[0-9]+\tbluez_output\./ { print $2; exit }')"
+# Cue device priority: explicit override → UGREEN USB DAC → any
+# bluetooth sink → nothing (master-only). The dj binary takes a
+# substring/exact match on either cpal device names or PipeWire sink
+# names, so "bluez_output" matches whichever BT headphones are paired.
+if [[ -n "${DJ_CUE_DEVICE:-}" ]]; then
+    CUE_DEVICE="$DJ_CUE_DEVICE"
+elif [[ -n "$UGREEN_SINK" ]]; then
+    CUE_DEVICE="KT USB Audio"
+elif [[ -n "$BLUEZ_SINK" ]]; then
+    CUE_DEVICE="bluez_output"
+else
+    CUE_DEVICE=""
+fi
 # Your "Mono" virtual sink (the loopback's capture side, usually
 # node.name "mono-capture"). Master goes here and gets mono-summed
 # by the loopback before reaching the speakers.
@@ -86,10 +101,15 @@ fi
 # these on the loader path or it silently falls back to plain CUDA.
 TRT_LIBS="$(pwd)/stem-spike/trt-libs/tensorrt_libs"
 [[ -d "$TRT_LIBS" ]] && CUDA_LIBS="${CUDA_LIBS}${TRT_LIBS}:"
+DJ_ARGS=( --midi "ODJ" )
+if [[ -n "$CUE_DEVICE" ]]; then
+    DJ_ARGS+=( --cue-device "$CUE_DEVICE" )
+    echo "[dj] cue → $CUE_DEVICE"
+else
+    echo "[dj] no cue device found — running master-only (no PFL)"
+fi
 LD_LIBRARY_PATH="${RELEASE_DIR}:${CUDA_LIBS}${LD_LIBRARY_PATH:-}" "${RELEASE_DIR}/dj" \
-    --cue-device "KT USB Audio" \
-    --midi "ODJ" \
-    "$@" &
+    "${DJ_ARGS[@]}" "$@" &
 DJ_PID=$!
 
 # --- Step 3: wait for "DJ Master" + "DJ Cue" streams, then force routes ---
@@ -118,9 +138,12 @@ if [[ -n "$MASTER_ID" && -n "$CUE_ID" ]]; then
         pactl move-sink-input "$MASTER_ID" "$MASTER_TARGET" 2>/dev/null \
             || echo "[dj]   (move failed — check pavucontrol)"
     fi
-    if [[ -n "$UGREEN_SINK" ]]; then
-        echo "[dj] DJ Cue    (sink-input $CUE_ID) → $UGREEN_SINK"
-        pactl move-sink-input "$CUE_ID" "$UGREEN_SINK" 2>/dev/null \
+    # Pick the same priority order we used to pick the cue device
+    # (UGREEN USB DAC, then any bluez sink). Skip if neither.
+    CUE_TARGET="${UGREEN_SINK:-$BLUEZ_SINK}"
+    if [[ -n "$CUE_TARGET" ]]; then
+        echo "[dj] DJ Cue    (sink-input $CUE_ID) → $CUE_TARGET"
+        pactl move-sink-input "$CUE_ID" "$CUE_TARGET" 2>/dev/null \
             || echo "[dj]   (move failed — check pavucontrol)"
     fi
 else
