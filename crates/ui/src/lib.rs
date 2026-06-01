@@ -1745,9 +1745,9 @@ fn overview_waveform(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sende
         }
     }
 
-    // Loop region overlay (overview-wide, very translucent so it
-    // doesn't obscure the waveform on long tracks where the loop
-    // span is only a few pixels).
+    // Loop region overlay + IN marker. The fill only appears once
+    // OUT is set, but the IN tick mark appears as soon as IN is
+    // pressed so you can see where it landed.
     if let Some((in_f, out_f)) = d.telemetry.loop_range() {
         let in_frac = (in_f as f32 / d.total_frames.max(1) as f32).clamp(0.0, 1.0);
         let out_frac = (out_f as f32 / d.total_frames.max(1) as f32).clamp(0.0, 1.0);
@@ -1763,6 +1763,14 @@ fn overview_waveform(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sende
                 Color32::from_rgba_premultiplied(120, 100, 20, 90),
             );
         }
+    }
+    if let Some(in_f) = d.telemetry.loop_in_frame() {
+        let frac = (in_f as f32 / d.total_frames.max(1) as f32).clamp(0.0, 1.0);
+        let x = rect.left() + frac * w;
+        painter.line_segment(
+            [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+            Stroke::new(1.5, Color32::from_rgb(255, 215, 80)),
+        );
     }
 
     let head_frac = d.telemetry.playhead_frames() as f32 / d.total_frames.max(1) as f32;
@@ -1869,11 +1877,17 @@ fn zoom_view(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
         }
     }
 
-    // Loop region highlight. Paint *behind* the beat grid so the
-    // grid lines stay readable. Translucent yellow fills the loop
-    // span; brighter vertical lines at IN and OUT mark the bounds.
-    if let Some((in_f, out_f)) = d.telemetry.loop_range() {
-        if d.sample_rate > 0 {
+    // Loop region highlight + bound markers. Painted *behind* the
+    // beat grid so the grid stays readable. Three states:
+    //  - IN only      → yellow vertical bar at IN (so you can see it
+    //                   landed before you press OUT).
+    //  - IN + OUT     → translucent fill across the span + bars at
+    //                   both bounds.
+    //  - neither      → nothing.
+    if d.sample_rate > 0 {
+        let in_t = d.telemetry.loop_in_frame().map(|f| f as f64 / d.sample_rate as f64);
+        let range = d.telemetry.loop_range();
+        if let Some((in_f, out_f)) = range {
             let in_t = in_f as f64 / d.sample_rate as f64;
             let out_t = out_f as f64 / d.sample_rate as f64;
             if out_t > view_start && in_t < view_end {
@@ -1889,13 +1903,6 @@ fn zoom_view(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
                         Color32::from_rgba_premultiplied(60, 50, 10, 70),
                     );
                 }
-                if in_t >= view_start && in_t <= view_end {
-                    let x = t_to_x(in_t);
-                    painter.line_segment(
-                        [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-                        Stroke::new(2.0, Color32::from_rgb(255, 215, 80)),
-                    );
-                }
                 if out_t >= view_start && out_t <= view_end {
                     let x = t_to_x(out_t);
                     painter.line_segment(
@@ -1903,6 +1910,17 @@ fn zoom_view(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
                         Stroke::new(2.0, Color32::from_rgb(255, 215, 80)),
                     );
                 }
+            }
+        }
+        // IN marker — drawn for both states so user gets immediate
+        // feedback after pressing IN, before pressing OUT.
+        if let Some(in_t) = in_t {
+            if in_t >= view_start && in_t <= view_end {
+                let x = t_to_x(in_t);
+                painter.line_segment(
+                    [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                    Stroke::new(2.0, Color32::from_rgb(255, 215, 80)),
+                );
             }
         }
     }
