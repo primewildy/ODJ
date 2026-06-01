@@ -706,6 +706,14 @@ pub fn spawn_load_worker(
                 unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, 10); }
                 match sc.separate(&path_s) {
                     Ok(stems) => {
+                        // Match the audio engine's stem routing (see
+                        // `sample_at` in audio/lib.rs:1145):
+                        //   DRUMS knob   → stems.drums
+                        //   VOCALS knob  → stems.vocals
+                        //   INSTR knob   → stems.bass + stems.other
+                        // The waveform overlays should mirror this so
+                        // the colours match what the user actually
+                        // hears when they push a stem knob.
                         let instr_buf: Vec<f32> = stems
                             .bass
                             .iter()
@@ -718,10 +726,10 @@ pub fn spawn_load_worker(
                             path: path_s.clone(),
                             stems: Arc::clone(&stems),
                             overview_drums: compute_overview_from(&stems.drums, ch, OVERVIEW_BUCKETS),
-                            overview_vocals: compute_overview_from(&stems.bass, ch, OVERVIEW_BUCKETS),
+                            overview_vocals: compute_overview_from(&stems.vocals, ch, OVERVIEW_BUCKETS),
                             overview_instr: compute_overview_from(&instr_buf, ch, OVERVIEW_BUCKETS),
                             hires_drums: compute_hires_peaks_from(&stems.drums, ch, HIRES_SAMPLES_PER_PEAK),
-                            hires_vocals: compute_hires_peaks_from(&stems.bass, ch, HIRES_SAMPLES_PER_PEAK),
+                            hires_vocals: compute_hires_peaks_from(&stems.vocals, ch, HIRES_SAMPLES_PER_PEAK),
                             hires_instr: compute_hires_peaks_from(&instr_buf, ch, HIRES_SAMPLES_PER_PEAK),
                         };
                         drop(stems);
