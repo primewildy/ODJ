@@ -696,13 +696,9 @@ impl Mixer {
             }
             // Pioneer CUE state machine. With quantize on, the "set cue"
             // branch snaps the new cue to the nearest beat from analysis.
-            // When a loop is active, CUE returns to loop IN instead of
-            // cue_frame so you can scrub back to the start of the loop
-            // mid-jam.
             DeckCommand::CuePress(_) => {
-                let target = deck.loop_in.unwrap_or(deck.cue_frame);
                 if deck.playing {
-                    deck.playhead = target as f64;
+                    deck.playhead = deck.cue_frame as f64;
                     deck.playing = false;
                     deck.in_preview = false;
                 } else {
@@ -715,8 +711,7 @@ impl Mixer {
             }
             DeckCommand::CueRelease(_) => {
                 if deck.in_preview {
-                    let target = deck.loop_in.unwrap_or(deck.cue_frame);
-                    deck.playhead = target as f64;
+                    deck.playhead = deck.cue_frame as f64;
                     deck.playing = false;
                     deck.in_preview = false;
                 }
@@ -807,10 +802,13 @@ impl Mixer {
             DeckCommand::LoopSetIn { .. } => {
                 let snapped = snap_to_beat_always(deck);
                 deck.loop_in = Some(snapped);
+                // Update the persistent cue point too: setting a loop
+                // IN moves CUE to that beat so the user can press CUE
+                // later (even AFTER exiting the loop) to jump back to
+                // the loop's start. Overwritten by the next LoopSetIn
+                // or by CuePress-while-paused.
+                deck.cue_frame = snapped;
                 deck.loop_exit_pending = false;
-                // If the existing OUT is now ≤ IN, clear it — the new
-                // IN invalidated the previous loop. User must press
-                // OUT again to re-activate.
                 if let Some(o) = deck.loop_out {
                     if o <= snapped { deck.loop_out = None; }
                 }
