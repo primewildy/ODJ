@@ -416,6 +416,34 @@ pub struct DjApp {
     /// in the top bar. Maintained locally; sent to the engine on change.
     cue_gain: f32,
     cue_mix: f32,
+    /// Auto-mix state machine — drives a 32-beat blend between decks
+    /// when the user clicks the "Auto-mix" top-bar button. None = off.
+    /// See [`tick_auto_mix`] for the phase logic.
+    auto_mix: Option<AutoMixActive>,
+}
+
+/// Active auto-mix between two decks. Holds enough state to drive the
+/// next per-frame tick without re-querying.
+struct AutoMixActive {
+    /// Currently-playing deck (whose audio we're fading out of).
+    out_deck: DeckId,
+    /// Other deck — the one with the freshly-loaded incoming track.
+    in_deck: DeckId,
+    /// Path of the incoming track. Used to detect "in deck has the
+    /// expected track loaded" once the async load completes.
+    in_path: PathBuf,
+    phase: MixPhase,
+}
+
+enum MixPhase {
+    /// Waiting for the incoming track to finish loading + arming the
+    /// start time at the OUT deck's next 16-beat red line.
+    Cueing,
+    /// 16 beats of "bring IN deck up to volume, drums still off".
+    PhaseA { start_t: f64, end_t: f64 },
+    /// 16 beats of "fade OUT deck down to silence after the drum
+    /// swap that happens at start_t".
+    PhaseC { start_t: f64, end_t: f64 },
 }
 
 impl DjApp {
@@ -472,6 +500,7 @@ impl DjApp {
             },
             cue_gain: 0.15,
             cue_mix: 1.0,
+            auto_mix: None,
         }
     }
 
@@ -969,12 +998,266 @@ impl DjApp {
             }
         }
     }
+
+    /// Find a candidate next track for auto-mix and load it onto the
+    /// inactive deck. Picks RANDOMLY from the currently-filtered track
+    /// list, excluding whatever's already loaded on either deck.
+    fn start_auto_mix(&mut self) {
+        // Which deck is "playing out of"? Whichever is actually playing.
+        // If both, pick A; if neither, no-op.
+        let playing_a = self.deck_a.telemetry.is_playing();
+        let playing_b = self.deck_b.telemetry.is_playing();
+        let out_deck = if playing_a {
+            DeckId::A
+        } else if playing_b {
+            DeckId::B
+        } else {
+            eprintln!("auto-mix: no deck playing — load + start a track first");
+            return;
+        };
+        let in_deck = match out_deck {
+            DeckId::A => DeckId::B,
+            DeckId::B => DeckId::A,
+        };
+        let Some(path) = self.pick_random_next_track() else {
+            eprintln!("auto-mix: no candidate track in current filter");
+            return;
+        };
+        eprintln!(
+            "auto-mix: out={:?} in={:?} → {}",
+            out_deck,
+            in_deck,
+            path.file_name().and_then(|s| s.to_str()).unwrap_or("?")
+        );
+        // Mute the incoming deck before loading so the cue cross-feed
+        // doesn't bleed into the master while it's coming up.
+        let _ = self.sender.send(DeckCommand::SetGain { deck: in_deck, gain: 0.0 });
+        let _ = self.sender.send(DeckCommand::SetStemDrums { deck: in_deck, gain: 0.0 });
+        // Match BPMs so the 16-beat windows align across both decks.
+        let _ = self.sender.send(DeckCommand::Sync { deck: in_deck });
+        self.start_load(path.clone(), in_deck);
+        self.auto_mix = Some(AutoMixActive {
+            out_deck,
+            in_deck,
+            in_path: path,
+            phase: MixPhase::Cueing,
+        });
+    }
+
+    /// Release every knob the orchestrator was driving and zero out
+    /// the state. Called from the button (toggle off) and from any
+    /// manual UI interaction during a running mix.
+    fn cancel_auto_mix(&mut self) {
+        let Some(active) = self.auto_mix.take() else { return };
+        eprintln!("auto-mix: cancelled");
+        // Best-effort reset: keep the OUT deck's audio audible, push
+        // the IN deck back to silence so a half-faded-in track doesn't
+        // sit in the mix. Drums get restored to 1.0 on both so a
+        // future manual play isn't silent.
+        let _ = self.sender.send(DeckCommand::SetGain { deck: active.in_deck, gain: 0.0 });
+        let _ = self.sender.send(DeckCommand::SetStemDrums { deck: active.in_deck, gain: 1.0 });
+        let _ = self.sender.send(DeckCommand::SetGain { deck: active.out_deck, gain: 1.0 });
+        let _ = self.sender.send(DeckCommand::SetStemDrums { deck: active.out_deck, gain: 1.0 });
+    }
+
+    /// Apply the current filter + sort (same logic as the track table)
+    /// and return a random path that isn't currently loaded on either
+    /// deck. None if no candidates remain.
+    fn pick_random_next_track(&self) -> Option<PathBuf> {
+        let filter_lower = self.filter.to_lowercase();
+        let target_key = match self.harmonic_filter {
+            Some(DeckId::A) => self.deck_a.key,
+            Some(DeckId::B) => self.deck_b.key,
+            None => None,
+        };
+        let harmonic_active = self.harmonic_filter.is_some() && target_key.is_some();
+        let now_a = self.deck_a.loaded_path.clone();
+        let now_b = self.deck_b.loaded_path.clone();
+
+        let candidates: Vec<&PathBuf> = self
+            .tracks
+            .iter()
+            .filter(|m| {
+                if Some(&m.path) == now_a.as_ref() || Some(&m.path) == now_b.as_ref() {
+                    return false;
+                }
+                if self.favourites_only && !self.favourites.contains(&m.path) {
+                    return false;
+                }
+                if !filter_lower.is_empty() {
+                    let hit = m.title.to_lowercase().contains(&filter_lower)
+                        || m.artist.to_lowercase().contains(&filter_lower)
+                        || m.filename.to_lowercase().contains(&filter_lower);
+                    if !hit {
+                        return false;
+                    }
+                }
+                if let Some(g) = self.genre_filter.as_deref() {
+                    if !m.genre.eq_ignore_ascii_case(g) {
+                        return false;
+                    }
+                }
+                if harmonic_active {
+                    let t = target_key.unwrap();
+                    let Some(c) = self.analysis_cache.get(&m.path) else {
+                        return false;
+                    };
+                    let Some(k) = c.key else {
+                        return false;
+                    };
+                    if !persistence::camelot_compatible(t, k) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .map(|m| &m.path)
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        // Cheap PRNG seeded from the OUT deck's playhead — gives
+        // different picks across sessions without an OS time call.
+        let seed = self.deck_a.telemetry.playhead_frames()
+            ^ self.deck_b.telemetry.playhead_frames()
+            ^ (candidates.len() as u64).wrapping_mul(0x9e3779b97f4a7c15);
+        let idx = (seed.wrapping_mul(0xbf58476d1ce4e5b9) >> 32) as usize % candidates.len();
+        Some(candidates[idx].clone())
+    }
+
+    /// Drive the auto-mix state machine forward by one tick. Called
+    /// each frame from `update`. Reads playhead time on the OUT deck,
+    /// pushes gain / drum-stem commands to ramp the mix through the
+    /// three phases.
+    fn tick_auto_mix(&mut self) {
+        let Some(active) = self.auto_mix.as_mut() else { return };
+        let out_deck = active.out_deck;
+        let in_deck = active.in_deck;
+        let out_d = match out_deck {
+            DeckId::A => &self.deck_a,
+            DeckId::B => &self.deck_b,
+        };
+        let in_d = match in_deck {
+            DeckId::A => &self.deck_a,
+            DeckId::B => &self.deck_b,
+        };
+        let out_t = out_d.playhead_secs();
+        let bpm = out_d.bpm.max(60.0).min(220.0);
+        let bar16_secs = 16.0 * 60.0 / bpm as f64;
+
+        match &active.phase {
+            MixPhase::Cueing => {
+                // Wait for IN deck to actually have its analysis (so
+                // we know the new track is loaded + grid is ready).
+                if in_d.loaded_path.as_deref() != Some(active.in_path.as_path())
+                    || in_d.beat_grid.is_empty()
+                {
+                    return;
+                }
+                // Find OUT deck's next red line (every-16-beat
+                // downbeat) that's at least ~1 s ahead so we have
+                // time to react.
+                let next_mix = out_d
+                    .downbeats
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| j % 4 == 0)
+                    .filter_map(|(_, &i)| out_d.beat_grid.get(i as usize).copied())
+                    .find(|&t| t > out_t + 1.0);
+                let Some(mix_t) = next_mix else {
+                    // No further mix point in the OUT deck — bail.
+                    eprintln!("auto-mix: no upcoming red line on out deck");
+                    self.cancel_auto_mix();
+                    return;
+                };
+                let phase_a_end = mix_t + bar16_secs;
+                eprintln!(
+                    "auto-mix: armed — start at {:.1}s, swap at {:.1}s, end at {:.1}s",
+                    mix_t,
+                    phase_a_end,
+                    phase_a_end + bar16_secs
+                );
+                // Schedule the IN deck to start playing right at mix_t.
+                // We could be more precise via a scheduled command,
+                // but simplest: spin until out_t crosses mix_t, then
+                // send Play. Handled below as the trigger.
+                active.phase = MixPhase::PhaseA {
+                    start_t: mix_t,
+                    end_t: phase_a_end,
+                };
+            }
+            MixPhase::PhaseA { start_t, end_t } => {
+                let start_t = *start_t;
+                let end_t = *end_t;
+                // Trigger Play on the IN deck once we cross start_t,
+                // but only do this once.
+                if !in_d.telemetry.is_playing() && out_t >= start_t {
+                    let _ = self.sender.send(DeckCommand::Play(in_deck));
+                }
+                if out_t < start_t {
+                    return;
+                }
+                let frac = ((out_t - start_t) / (end_t - start_t)).clamp(0.0, 1.0) as f32;
+                // IN deck vol ramps 0 → 1 over 16 beats. IN deck
+                // drums stay at 0 — old track's drums hold the floor.
+                let _ = self
+                    .sender
+                    .send(DeckCommand::SetGain { deck: in_deck, gain: frac });
+                if out_t >= end_t {
+                    // Drum swap: instant cut on the beat. IN drums up,
+                    // OUT drums down. Vols are: OUT=1, IN=1.
+                    let _ = self
+                        .sender
+                        .send(DeckCommand::SetStemDrums { deck: in_deck, gain: 1.0 });
+                    let _ = self
+                        .sender
+                        .send(DeckCommand::SetStemDrums { deck: out_deck, gain: 0.0 });
+                    active.phase = MixPhase::PhaseC {
+                        start_t: end_t,
+                        end_t: end_t + bar16_secs,
+                    };
+                }
+            }
+            MixPhase::PhaseC { start_t, end_t } => {
+                let start_t = *start_t;
+                let end_t = *end_t;
+                let frac = ((out_t - start_t) / (end_t - start_t)).clamp(0.0, 1.0) as f32;
+                // OUT deck vol fades 1 → 0 over 16 beats.
+                let _ = self.sender.send(DeckCommand::SetGain {
+                    deck: out_deck,
+                    gain: 1.0 - frac,
+                });
+                if out_t >= end_t {
+                    // Done — stop OUT deck and reset its state for a
+                    // future load (gain 1, drums 1).
+                    let _ = self.sender.send(DeckCommand::Pause(out_deck));
+                    let _ = self.sender.send(DeckCommand::SetGain {
+                        deck: out_deck,
+                        gain: 1.0,
+                    });
+                    let _ = self.sender.send(DeckCommand::SetStemDrums {
+                        deck: out_deck,
+                        gain: 1.0,
+                    });
+                    eprintln!("auto-mix: complete");
+                    self.auto_mix = None;
+                }
+            }
+        }
+    }
 }
 
 impl eframe::App for DjApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_loads();
-        handle_keys(ctx, &self.sender);
+        self.tick_auto_mix();
+        // Tracks whether any deck-affecting user input fired this
+        // frame. Auto-mix aborts at end-of-frame if so. Cell because
+        // multiple nested egui closures need to set it.
+        let user_touched = std::cell::Cell::new(false);
+        if handle_keys(ctx, &self.sender) {
+            user_touched.set(true);
+        }
 
         // Force continuous repaint — the deck waveforms and the
         // running playhead need ~60 Hz anyway, and keeping the event
@@ -998,6 +1281,20 @@ impl eframe::App for DjApp {
                         deck: DeckId::B,
                         on: beat_align,
                     });
+                }
+                ui.separator();
+                let mix_label = if self.auto_mix.is_some() {
+                    "⏹ Auto-mix (running)"
+                } else {
+                    "▶ Auto-mix"
+                };
+                let auto_btn = ui.button(mix_label);
+                if auto_btn.clicked() {
+                    if self.auto_mix.is_some() {
+                        self.cancel_auto_mix();
+                    } else {
+                        self.start_auto_mix();
+                    }
                 }
                 ui.separator();
                 if ui.add(egui::Slider::new(&mut self.cue_gain, 0.0..=1.5)
@@ -1124,7 +1421,9 @@ impl eframe::App for DjApp {
                     |ui| {
                         ui.set_min_width(col_w);
                         ui.set_max_width(col_w);
-                        deck_controls(ui, DeckId::A, &mut self.deck_a, &self.sender);
+                        if deck_controls(ui, DeckId::A, &mut self.deck_a, &self.sender) {
+                            user_touched.set(true);
+                        }
                     },
                 );
                 ui.separator();
@@ -1134,11 +1433,20 @@ impl eframe::App for DjApp {
                     |ui| {
                         ui.set_min_width(col_w);
                         ui.set_max_width(col_w);
-                        deck_controls(ui, DeckId::B, &mut self.deck_b, &self.sender);
+                        if deck_controls(ui, DeckId::B, &mut self.deck_b, &self.sender) {
+                            user_touched.set(true);
+                        }
                     },
                 );
             });
         });
+        // End-of-frame abort: any deck-affecting user input cancels
+        // an in-flight auto-mix. The orchestrator's own gain/drum
+        // writes go directly through `self.sender` and never set
+        // `user_touched`, so they don't self-cancel.
+        if user_touched.get() && self.auto_mix.is_some() {
+            self.cancel_auto_mix();
+        }
     }
 }
 
@@ -1146,7 +1454,16 @@ impl eframe::App for DjApp {
 /// the transport / pitch / vol / EQ rows. Waveforms live above this in the
 /// central panel so the two decks' beat grids sit visually adjacent — see
 /// the CentralPanel block in `App::update`.
-fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sender) {
+/// Returns `true` if any widget in this column fired a user command —
+/// the caller uses that as the "abort auto-mix" signal.
+#[must_use]
+fn deck_controls(
+    ui: &mut egui::Ui,
+    deck: DeckId,
+    d: &mut DeckUi,
+    sender: &Sender,
+) -> bool {
+    let mut user_touched = false;
     let label = match deck {
         DeckId::A => "Deck A",
         DeckId::B => "Deck B",
@@ -1198,6 +1515,7 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
         let playing = d.telemetry.is_playing();
         let play_label = if playing { "⏸ Pause" } else { "▶ Play" };
         if ui.button(play_label).clicked() {
+            user_touched = true;
             let _ = sender.send(DeckCommand::PlayToggle(deck));
         }
 
@@ -1205,9 +1523,11 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
         let now_down = cue_resp.is_pointer_button_down_on();
         match (d.cue_held, now_down) {
             (false, true) => {
+                user_touched = true;
                 let _ = sender.send(DeckCommand::CuePress(deck));
             }
             (true, false) => {
+                user_touched = true;
                 let _ = sender.send(DeckCommand::CueRelease(deck));
             }
             _ => {}
@@ -1215,6 +1535,7 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
         d.cue_held = now_down;
 
         if ui.checkbox(&mut d.quantize, "Q").changed() {
+            user_touched = true;
             let _ = sender.send(DeckCommand::SetQuantize {
                 deck,
                 on: d.quantize,
@@ -1224,17 +1545,20 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
         // (phase vocoder). When off, vinyl-style coupled pitch+tempo.
         let mut pitch_lock = d.telemetry.is_pitch_locked();
         if ui.checkbox(&mut pitch_lock, "🔒 key").changed() {
+            user_touched = true;
             let _ = sender.send(DeckCommand::SetPitchLock {
                 deck,
                 on: pitch_lock,
             });
         }
         if ui.button("⟲ Sync").clicked() {
+            user_touched = true;
             let _ = sender.send(DeckCommand::Sync { deck });
         }
         // PFL / cue monitor toggle. Mirrors deck.cue_on telemetry.
         let mut cue_on = d.telemetry.is_cue_on();
         if ui.toggle_value(&mut cue_on, "🎧 CUE").changed() {
+            user_touched = true;
             let _ = sender.send(DeckCommand::SetCueOn { deck, on: cue_on });
         }
     });
@@ -1295,6 +1619,7 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
                     .show_value(false),
             );
             if r.changed() {
+                user_touched = true;
                 let _ = sender.send(DeckCommand::SetSpeed { deck, ratio: speed });
             }
             ui.label(format!("{:.3}", speed));
@@ -1303,14 +1628,17 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
         ui.vertical(|ui| {
             let cur_high = d.telemetry.current_eq_high_db();
             if let Some(v) = knob(ui, "HIGH", cur_high, -25.0..=6.0, KNOB_DIA) {
+                user_touched = true;
                 let _ = sender.send(DeckCommand::SetEqHigh { deck, db: v });
             }
             let cur_mid = d.telemetry.current_eq_mid_db();
             if let Some(v) = knob(ui, "MID", cur_mid, -25.0..=6.0, KNOB_DIA) {
+                user_touched = true;
                 let _ = sender.send(DeckCommand::SetEqMid { deck, db: v });
             }
             let cur_low = d.telemetry.current_eq_low_db();
             if let Some(v) = knob(ui, "LOW", cur_low, -25.0..=6.0, KNOB_DIA) {
+                user_touched = true;
                 let _ = sender.send(DeckCommand::SetEqLow { deck, db: v });
             }
         });
@@ -1325,6 +1653,7 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
                     .show_value(false),
             );
             if r.changed() {
+                user_touched = true;
                 let _ = sender.send(DeckCommand::SetGain { deck, gain });
             }
             ui.label(format!("{:.2}", gain));
@@ -1333,18 +1662,22 @@ fn deck_controls(ui: &mut egui::Ui, deck: DeckId, d: &mut DeckUi, sender: &Sende
         ui.vertical(|ui| {
             let cur_drums = d.telemetry.current_stem_drums();
             if let Some(v) = knob(ui, drums_lbl, cur_drums, 0.0..=1.5, KNOB_DIA) {
+                user_touched = true;
                 let _ = sender.send(DeckCommand::SetStemDrums { deck, gain: v });
             }
             let cur_vocals = d.telemetry.current_stem_vocals();
             if let Some(v) = knob(ui, vocals_lbl, cur_vocals, 0.0..=1.5, KNOB_DIA) {
+                user_touched = true;
                 let _ = sender.send(DeckCommand::SetStemVocals { deck, gain: v });
             }
             let cur_instr = d.telemetry.current_stem_instruments();
             if let Some(v) = knob(ui, instr_lbl, cur_instr, 0.0..=1.5, KNOB_DIA) {
+                user_touched = true;
                 let _ = sender.send(DeckCommand::SetStemInstruments { deck, gain: v });
             }
         });
     });
+    user_touched
 }
 
 /// Renders a vertical fader column with 3 invisible knob-shaped slots
@@ -1694,29 +2027,38 @@ fn bpm_sort_value(bpm: f32) -> u32 {
     }
 }
 
-fn handle_keys(ctx: &egui::Context, sender: &Sender) {
+#[must_use]
+fn handle_keys(ctx: &egui::Context, sender: &Sender) -> bool {
+    let mut touched = false;
     ctx.input(|i| {
         // Deck A: space play/pause, c hold-cue
         if i.key_pressed(egui::Key::Space) {
+            touched = true;
             let _ = sender.send(DeckCommand::PlayToggle(DeckId::A));
         }
         if i.key_pressed(egui::Key::C) {
+            touched = true;
             let _ = sender.send(DeckCommand::CuePress(DeckId::A));
         }
         if i.key_released(egui::Key::C) {
+            touched = true;
             let _ = sender.send(DeckCommand::CueRelease(DeckId::A));
         }
         // Deck B: b play/pause, n hold-cue
         if i.key_pressed(egui::Key::B) {
+            touched = true;
             let _ = sender.send(DeckCommand::PlayToggle(DeckId::B));
         }
         if i.key_pressed(egui::Key::N) {
+            touched = true;
             let _ = sender.send(DeckCommand::CuePress(DeckId::B));
         }
         if i.key_released(egui::Key::N) {
+            touched = true;
             let _ = sender.send(DeckCommand::CueRelease(DeckId::B));
         }
     });
+    touched
 }
 
 /// Per-column draw for the overview waveform's stem overlay. Iterates
