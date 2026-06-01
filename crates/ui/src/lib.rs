@@ -1618,7 +1618,15 @@ impl eframe::App for DjApp {
         // running playhead need ~60 Hz anyway, and keeping the event
         // loop hot prevents Hyprland's "Application Not Responding"
         // dialog from popping when the surface goes idle.
+        //
+        // request_repaint() schedules a paint at the next vsync, but
+        // Wayland compositors stop delivering vsync events to
+        // unfocused surfaces — so on an idle/unfocused window, the
+        // next paint can be delayed indefinitely and tick_auto_mix
+        // misses its 22 s trigger window entirely. request_repaint_after
+        // uses an OS timer and fires regardless of focus state.
         ctx.request_repaint();
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
