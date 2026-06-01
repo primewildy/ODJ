@@ -43,13 +43,14 @@ const ZOOM_PLAYHEAD_FRAC: f32 = 0.33;
 // rather than mask each other. Drums = warm red (impact / energy),
 // bass = blue (low end), melody = yellow-green (vocals + harmonic).
 // Full-saturation RGB triad with alpha around 60 % so overlapping
-// columns blend without occluding. Picked for high contrast on the
-// dark background: pure red for drums (impact), pure green for the
-// bass/vocal stem (rendered as "vocals" in UI), pure blue for the
-// instrumental remainder.
-const STEM_COLOR_DRUMS: egui::Color32 = egui::Color32::from_rgba_premultiplied(220, 50, 50, 150);
+// columns blend without occluding. Red goes on the *quietest* stem
+// (INSTR) so it doesn't fight the red 16-beat downbeat markers on
+// the waveform — drums are usually the tallest peaks, so giving them
+// the loudest colour as well makes the bar grid hard to read. Blue
+// for drums (cool, recedes), green for vocals, red for instr.
+const STEM_COLOR_DRUMS: egui::Color32 = egui::Color32::from_rgba_premultiplied(70, 120, 230, 150);
 const STEM_COLOR_VOCALS: egui::Color32 = egui::Color32::from_rgba_premultiplied(60, 200, 80, 150);
-const STEM_COLOR_INSTR: egui::Color32 = egui::Color32::from_rgba_premultiplied(70, 120, 230, 150);
+const STEM_COLOR_INSTR: egui::Color32 = egui::Color32::from_rgba_premultiplied(220, 50, 50, 150);
 
 /// Background worker that fills the analysis cache by decoding +
 /// analysing each track that's not already in the cache. Spawned once at
