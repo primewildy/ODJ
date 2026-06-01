@@ -643,6 +643,12 @@ impl Mixer {
                 // Drop previous track's stems — the worker will push
                 // fresh ones when separation completes.
                 deck.stems = None;
+                // Loop points are per-track; carrying them across a
+                // track swap would point into nonsense source-frames
+                // (different total length / different beat grid).
+                deck.loop_in = None;
+                deck.loop_out = None;
+                deck.loop_exit_pending = false;
             }
             DeckCommand::UpdateAnalysis { analysis, .. } => {
                 // Slow-path arrival from the async analyser. Swap in
