@@ -20,6 +20,28 @@ pub(crate) use auto_mix::{
     AutoMixController, AutoMixShared, AutoMixState, ArmedState, DeckMeta, spawn_load_worker,
 };
 
+/// One-shot diagnostic for the elusive "grid moves but waveform
+/// disappears" state. Logs the deck's hires/beat_grid/loaded_path
+/// status once per deck per anomaly run so the log isn't spammed.
+fn log_waveform_anomaly(deck: DeckId, d: &DeckUi) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static LOGGED_A: AtomicBool = AtomicBool::new(false);
+    static LOGGED_B: AtomicBool = AtomicBool::new(false);
+    let logged = match deck { DeckId::A => &LOGGED_A, DeckId::B => &LOGGED_B };
+    if logged.swap(true, Ordering::Relaxed) { return; }
+    eprintln!(
+        "waveform-anomaly deck={:?} loaded_path={:?} hires_len={} samples_per_hires={} total_frames={} sample_rate={} beat_grid_len={} downbeats_len={}",
+        deck,
+        d.loaded_path.as_ref().and_then(|p| p.file_name()).and_then(|s| s.to_str()),
+        d.hires.len(),
+        d.samples_per_hires,
+        d.total_frames,
+        d.sample_rate,
+        d.beat_grid.len(),
+        d.downbeats.len(),
+    );
+}
+
 fn snapshot_into(d: &DeckUi, m: &mut DeckMeta) {
     m.loaded_path = d.loaded_path.clone();
     m.bpm = d.bpm;
@@ -1688,31 +1710,56 @@ fn zoom_view(ui: &mut egui::Ui, d: &DeckUi, deck: DeckId, sender: &Sender) {
     // marker and beat grid even when view_start is negative (i.e. the start
     // of the track is partially in view during the first ~ZOOM_PLAYHEAD_FRAC
     // * window_secs seconds of playback) or view_end exceeds track length.
-    if !d.hires.is_empty() && d.sample_rate > 0 {
-        let peaks_per_sec = d.sample_rate as f64 / d.samples_per_hires as f64;
+    //
+    // Guard against the "grid moves but waveform disappears" bug: it shows
+    // up when d.hires/d.samples_per_hires get out of sync with the rest of
+    // the deck state (e.g., a stale event resets one but not the others).
+    // Compute peaks_per_sec defensively and skip drawing — with a visible
+    // marker + one-shot log — if anything looks wrong, so the user knows
+    // it's a bug rather than thinking the track has gone silent.
+    if d.sample_rate > 0 && d.total_frames > 0 {
         let track_secs = d.total_frames as f64 / d.sample_rate as f64;
         let cols = w.ceil() as usize;
-        let stems_ready = !d.stem_hires_drums.is_empty()
-            && !d.stem_hires_vocals.is_empty()
-            && !d.stem_hires_instr.is_empty();
-        if stems_ready {
-            for (peaks, color) in [
-                (&d.stem_hires_drums, STEM_COLOR_DRUMS),
-                (&d.stem_hires_vocals, STEM_COLOR_VOCALS),
-                (&d.stem_hires_instr, STEM_COLOR_INSTR),
-            ] {
-                let stroke = Stroke::new(1.0, color);
+        if d.hires.is_empty() || d.samples_per_hires == 0 {
+            // Track is "loaded" enough to have a beat grid but the
+            // peaks data is missing. Render a hairline placeholder so
+            // the zoom view doesn't look frozen.
+            painter.line_segment(
+                [Pos2::new(rect.left(), mid), Pos2::new(rect.right(), mid)],
+                Stroke::new(1.0, Color32::from_gray(50)),
+            );
+            painter.text(
+                Pos2::new(rect.left() + 8.0, rect.top() + 8.0),
+                egui::Align2::LEFT_TOP,
+                "(no waveform data — track loaded?)",
+                egui::FontId::proportional(11.0),
+                Color32::from_gray(120),
+            );
+            log_waveform_anomaly(deck, d);
+        } else {
+            let peaks_per_sec = d.sample_rate as f64 / d.samples_per_hires as f64;
+            let stems_ready = !d.stem_hires_drums.is_empty()
+                && !d.stem_hires_vocals.is_empty()
+                && !d.stem_hires_instr.is_empty();
+            if stems_ready {
+                for (peaks, color) in [
+                    (&d.stem_hires_drums, STEM_COLOR_DRUMS),
+                    (&d.stem_hires_vocals, STEM_COLOR_VOCALS),
+                    (&d.stem_hires_instr, STEM_COLOR_INSTR),
+                ] {
+                    let stroke = Stroke::new(1.0, color);
+                    draw_zoom_columns(
+                        &painter, peaks, peaks_per_sec, view_start, window_secs,
+                        track_secs, rect.left(), mid, h * 0.45, cols, stroke,
+                    );
+                }
+            } else {
+                let stroke = Stroke::new(1.0, Color32::from_rgb(120, 200, 255));
                 draw_zoom_columns(
-                    &painter, peaks, peaks_per_sec, view_start, window_secs,
+                    &painter, &d.hires, peaks_per_sec, view_start, window_secs,
                     track_secs, rect.left(), mid, h * 0.45, cols, stroke,
                 );
             }
-        } else {
-            let stroke = Stroke::new(1.0, Color32::from_rgb(120, 200, 255));
-            draw_zoom_columns(
-                &painter, &d.hires, peaks_per_sec, view_start, window_secs,
-                track_secs, rect.left(), mid, h * 0.45, cols, stroke,
-            );
         }
     }
 
