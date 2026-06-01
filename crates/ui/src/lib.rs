@@ -416,10 +416,20 @@ pub struct DjApp {
     /// in the top bar. Maintained locally; sent to the engine on change.
     cue_gain: f32,
     cue_mix: f32,
-    /// Auto-mix state machine — drives a 32-beat blend between decks
-    /// when the user clicks the "Auto-mix" top-bar button. None = off.
-    /// See [`tick_auto_mix`] for the phase logic.
-    auto_mix: Option<AutoMixActive>,
+    /// Auto-mix mode — `Off` is the resting state; `Armed` means the
+    /// user clicked the button and we're waiting for the playing
+    /// track to approach its end; `Active` is the 32-beat blend in
+    /// flight. After a blend completes, state returns to `Armed`, so
+    /// turning auto-mix on loops indefinitely (a track gets mixed in
+    /// every ~3-4 minutes until the filtered list is exhausted or the
+    /// user clicks the button again).
+    auto_mix: AutoMixState,
+}
+
+enum AutoMixState {
+    Off,
+    Armed,
+    Active(AutoMixActive),
 }
 
 /// Active auto-mix between two decks. Holds enough state to drive the
@@ -432,6 +442,9 @@ struct AutoMixActive {
     /// Path of the incoming track. Used to detect "in deck has the
     /// expected track loaded" once the async load completes.
     in_path: PathBuf,
+    /// True once we've sent `Sync` for this mix (which has to happen
+    /// AFTER the in deck's analysis is available on the engine side).
+    sync_sent: bool,
     phase: MixPhase,
 }
 
@@ -500,7 +513,7 @@ impl DjApp {
             },
             cue_gain: 0.15,
             cue_mix: 1.0,
-            auto_mix: None,
+            auto_mix: AutoMixState::Off,
         }
     }
 
@@ -999,65 +1012,92 @@ impl DjApp {
         }
     }
 
-    /// Find a candidate next track for auto-mix and load it onto the
-    /// inactive deck. Picks RANDOMLY from the currently-filtered track
-    /// list, excluding whatever's already loaded on either deck.
-    fn start_auto_mix(&mut self) {
-        // Which deck is "playing out of"? Whichever is actually playing.
-        // If both, pick A; if neither, no-op.
-        let playing_a = self.deck_a.telemetry.is_playing();
-        let playing_b = self.deck_b.telemetry.is_playing();
-        let out_deck = if playing_a {
-            DeckId::A
-        } else if playing_b {
-            DeckId::B
-        } else {
-            eprintln!("auto-mix: no deck playing — load + start a track first");
-            return;
-        };
+    /// Turn auto-mix ON. Sets state to `Armed` and waits for the
+    /// playing track to approach its end before triggering a blend.
+    /// The mode stays on across mixes — each completed blend loops
+    /// back to Armed so the next track gets mixed in too.
+    fn arm_auto_mix(&mut self) {
+        eprintln!("auto-mix: armed (will mix in next track ~32 beats before end)");
+        self.auto_mix = AutoMixState::Armed;
+    }
+
+    /// Turn auto-mix OFF entirely. If a blend is in flight, abort
+    /// it and release the knobs. Called by the button (toggle off)
+    /// and by any manual user input during an active mix.
+    fn disarm_auto_mix(&mut self) {
+        let prev = std::mem::replace(&mut self.auto_mix, AutoMixState::Off);
+        match prev {
+            AutoMixState::Off => {}
+            AutoMixState::Armed => {
+                eprintln!("auto-mix: disarmed");
+            }
+            AutoMixState::Active(active) => {
+                eprintln!("auto-mix: cancelled (mid-blend)");
+                // Restore the OUT deck to full audio (in case we're
+                // mid PhaseC fade) and zero the IN deck (in case
+                // we're mid PhaseA ramp-up).
+                let _ = self
+                    .sender
+                    .send(DeckCommand::SetGain { deck: active.in_deck, gain: 0.0 });
+                let _ = self
+                    .sender
+                    .send(DeckCommand::SetStemDrums { deck: active.in_deck, gain: 1.0 });
+                let _ = self
+                    .sender
+                    .send(DeckCommand::SetGain { deck: active.out_deck, gain: 1.0 });
+                let _ = self
+                    .sender
+                    .send(DeckCommand::SetStemDrums { deck: active.out_deck, gain: 1.0 });
+            }
+        }
+    }
+
+    /// Called from `cancel_auto_mix` used by user-touch detection.
+    /// Same behaviour as `disarm_auto_mix` — go all the way to Off
+    /// when the user touches anything during a blend.
+    fn cancel_auto_mix(&mut self) {
+        if matches!(self.auto_mix, AutoMixState::Active(_)) {
+            self.disarm_auto_mix();
+        }
+    }
+
+    /// Kick off an active blend on a specific OUT deck. Picks the
+    /// next track, loads it on the other deck, and transitions to
+    /// `Active { phase: Cueing }`. Returns false if no candidate was
+    /// found (state stays Armed for the next attempt).
+    fn begin_active_mix(&mut self, out_deck: DeckId) -> bool {
         let in_deck = match out_deck {
             DeckId::A => DeckId::B,
             DeckId::B => DeckId::A,
         };
         let Some(path) = self.pick_random_next_track() else {
             eprintln!("auto-mix: no candidate track in current filter");
-            return;
+            return false;
         };
         eprintln!(
-            "auto-mix: out={:?} in={:?} → {}",
+            "auto-mix: triggering blend out={:?} in={:?} → {}",
             out_deck,
             in_deck,
             path.file_name().and_then(|s| s.to_str()).unwrap_or("?")
         );
-        // Mute the incoming deck before loading so the cue cross-feed
-        // doesn't bleed into the master while it's coming up.
-        let _ = self.sender.send(DeckCommand::SetGain { deck: in_deck, gain: 0.0 });
-        let _ = self.sender.send(DeckCommand::SetStemDrums { deck: in_deck, gain: 0.0 });
-        // Match BPMs so the 16-beat windows align across both decks.
-        let _ = self.sender.send(DeckCommand::Sync { deck: in_deck });
+        // Mute the incoming deck before loading.
+        let _ = self.sender.send(DeckCommand::SetGain {
+            deck: in_deck,
+            gain: 0.0,
+        });
+        let _ = self.sender.send(DeckCommand::SetStemDrums {
+            deck: in_deck,
+            gain: 0.0,
+        });
         self.start_load(path.clone(), in_deck);
-        self.auto_mix = Some(AutoMixActive {
+        self.auto_mix = AutoMixState::Active(AutoMixActive {
             out_deck,
             in_deck,
             in_path: path,
+            sync_sent: false,
             phase: MixPhase::Cueing,
         });
-    }
-
-    /// Release every knob the orchestrator was driving and zero out
-    /// the state. Called from the button (toggle off) and from any
-    /// manual UI interaction during a running mix.
-    fn cancel_auto_mix(&mut self) {
-        let Some(active) = self.auto_mix.take() else { return };
-        eprintln!("auto-mix: cancelled");
-        // Best-effort reset: keep the OUT deck's audio audible, push
-        // the IN deck back to silence so a half-faded-in track doesn't
-        // sit in the mix. Drums get restored to 1.0 on both so a
-        // future manual play isn't silent.
-        let _ = self.sender.send(DeckCommand::SetGain { deck: active.in_deck, gain: 0.0 });
-        let _ = self.sender.send(DeckCommand::SetStemDrums { deck: active.in_deck, gain: 1.0 });
-        let _ = self.sender.send(DeckCommand::SetGain { deck: active.out_deck, gain: 1.0 });
-        let _ = self.sender.send(DeckCommand::SetStemDrums { deck: active.out_deck, gain: 1.0 });
+        true
     }
 
     /// Apply the current filter + sort (same logic as the track table)
@@ -1126,86 +1166,142 @@ impl DjApp {
     }
 
     /// Drive the auto-mix state machine forward by one tick. Called
-    /// each frame from `update`. Reads playhead time on the OUT deck,
-    /// pushes gain / drum-stem commands to ramp the mix through the
-    /// three phases.
+    /// each frame from `update`.
+    ///
+    /// - `Off`: no-op.
+    /// - `Armed`: watch the playing deck; when it's within ~48 beats
+    ///   of its end (16 beat lookahead + 32 beat blend) start a blend
+    ///   by loading + cueing the next track.
+    /// - `Active`: ramp gain / swap drums per phase. On completion,
+    ///   return to `Armed` so the loop continues.
     fn tick_auto_mix(&mut self) {
-        let Some(active) = self.auto_mix.as_mut() else { return };
+        match self.auto_mix {
+            AutoMixState::Off => {}
+            AutoMixState::Armed => self.tick_armed(),
+            AutoMixState::Active(_) => self.tick_active(),
+        }
+    }
+
+    fn tick_armed(&mut self) {
+        // Pick whichever deck is currently playing as OUT. If neither
+        // is playing (just-started session, or both done) we can't
+        // trigger yet.
+        let playing_a = self.deck_a.telemetry.is_playing();
+        let playing_b = self.deck_b.telemetry.is_playing();
+        let out_deck = if playing_a && !playing_b {
+            DeckId::A
+        } else if playing_b && !playing_a {
+            DeckId::B
+        } else {
+            // Both playing → mid-mix shouldn't reach here. Neither
+            // playing → wait.
+            return;
+        };
+        let out_d = self.deck_for(out_deck);
+        let bpm = out_d.bpm;
+        if bpm <= 0.0 || out_d.beat_grid.is_empty() || out_d.total_frames == 0 || out_d.sample_rate == 0 {
+            return;
+        }
+        let total_secs = out_d.total_frames as f64 / out_d.sample_rate as f64;
+        let out_t = out_d.playhead_secs();
+        let remaining = total_secs - out_t;
+        // 48 beats of headroom: up to 16 beats waiting for the next
+        // red line, then 32 beats of blend. Trigger when remaining
+        // drops below that.
+        let bar_secs = 60.0 / bpm as f64;
+        let trigger_at = 48.0 * bar_secs;
+        if remaining > trigger_at {
+            return;
+        }
+        // Try to start a blend. If no candidate is found we stay
+        // Armed — the next tick will try again and eventually we'll
+        // run out of track and just stop.
+        self.begin_active_mix(out_deck);
+    }
+
+    fn tick_active(&mut self) {
+        let AutoMixState::Active(active) = &mut self.auto_mix else { return };
         let out_deck = active.out_deck;
         let in_deck = active.in_deck;
-        let out_d = match out_deck {
-            DeckId::A => &self.deck_a,
-            DeckId::B => &self.deck_b,
+        // Snapshot read-only deck state so we don't conflict with
+        // borrows of self.sender / self.auto_mix below.
+        let (out_t, bpm, out_total_secs) = {
+            let d = match out_deck { DeckId::A => &self.deck_a, DeckId::B => &self.deck_b };
+            let total = if d.sample_rate > 0 {
+                d.total_frames as f64 / d.sample_rate as f64
+            } else {
+                f64::INFINITY
+            };
+            (d.playhead_secs(), d.bpm.clamp(60.0, 220.0), total)
         };
-        let in_d = match in_deck {
-            DeckId::A => &self.deck_a,
-            DeckId::B => &self.deck_b,
+        let (in_loaded_path, in_grid_ready, in_playing) = {
+            let d = match in_deck { DeckId::A => &self.deck_a, DeckId::B => &self.deck_b };
+            (
+                d.loaded_path.clone(),
+                !d.beat_grid.is_empty(),
+                d.telemetry.is_playing(),
+            )
         };
-        let out_t = out_d.playhead_secs();
-        let bpm = out_d.bpm.max(60.0).min(220.0);
         let bar16_secs = 16.0 * 60.0 / bpm as f64;
 
-        match &active.phase {
+        match active.phase.clone_for_match() {
             MixPhase::Cueing => {
-                // Wait for IN deck to actually have its analysis (so
-                // we know the new track is loaded + grid is ready).
-                if in_d.loaded_path.as_deref() != Some(active.in_path.as_path())
-                    || in_d.beat_grid.is_empty()
+                // Wait for IN deck to actually have its analysis.
+                if in_loaded_path.as_deref() != Some(active.in_path.as_path())
+                    || !in_grid_ready
                 {
                     return;
                 }
+                // Send Sync NOW — both decks have BPM, so the engine
+                // can actually match. Only once per blend.
+                if !active.sync_sent {
+                    let _ = self.sender.send(DeckCommand::Sync { deck: in_deck });
+                    active.sync_sent = true;
+                }
                 // Find OUT deck's next red line (every-16-beat
-                // downbeat) that's at least ~1 s ahead so we have
-                // time to react.
-                let next_mix = out_d
-                    .downbeats
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, _)| j % 4 == 0)
-                    .filter_map(|(_, &i)| out_d.beat_grid.get(i as usize).copied())
-                    .find(|&t| t > out_t + 1.0);
+                // downbeat) at least 1 s ahead.
+                let next_mix = {
+                    let d = match out_deck { DeckId::A => &self.deck_a, DeckId::B => &self.deck_b };
+                    d.downbeats
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| j % 4 == 0)
+                        .filter_map(|(_, &i)| d.beat_grid.get(i as usize).copied())
+                        .find(|&t| t > out_t + 1.0)
+                };
                 let Some(mix_t) = next_mix else {
-                    // No further mix point in the OUT deck — bail.
-                    eprintln!("auto-mix: no upcoming red line on out deck");
-                    self.cancel_auto_mix();
+                    eprintln!("auto-mix: no upcoming red line on out deck — bailing");
+                    self.disarm_auto_mix();
                     return;
                 };
-                let phase_a_end = mix_t + bar16_secs;
+                if mix_t + 2.0 * bar16_secs > out_total_secs {
+                    eprintln!("auto-mix: not enough track left for 32-beat blend — bailing");
+                    self.disarm_auto_mix();
+                    return;
+                }
                 eprintln!(
-                    "auto-mix: armed — start at {:.1}s, swap at {:.1}s, end at {:.1}s",
+                    "auto-mix: PhaseA armed — start {:.1}s, drum swap {:.1}s, end {:.1}s",
                     mix_t,
-                    phase_a_end,
-                    phase_a_end + bar16_secs
+                    mix_t + bar16_secs,
+                    mix_t + 2.0 * bar16_secs
                 );
-                // Schedule the IN deck to start playing right at mix_t.
-                // We could be more precise via a scheduled command,
-                // but simplest: spin until out_t crosses mix_t, then
-                // send Play. Handled below as the trigger.
                 active.phase = MixPhase::PhaseA {
                     start_t: mix_t,
-                    end_t: phase_a_end,
+                    end_t: mix_t + bar16_secs,
                 };
             }
             MixPhase::PhaseA { start_t, end_t } => {
-                let start_t = *start_t;
-                let end_t = *end_t;
-                // Trigger Play on the IN deck once we cross start_t,
-                // but only do this once.
-                if !in_d.telemetry.is_playing() && out_t >= start_t {
+                if !in_playing && out_t >= start_t {
                     let _ = self.sender.send(DeckCommand::Play(in_deck));
                 }
                 if out_t < start_t {
                     return;
                 }
                 let frac = ((out_t - start_t) / (end_t - start_t)).clamp(0.0, 1.0) as f32;
-                // IN deck vol ramps 0 → 1 over 16 beats. IN deck
-                // drums stay at 0 — old track's drums hold the floor.
                 let _ = self
                     .sender
                     .send(DeckCommand::SetGain { deck: in_deck, gain: frac });
                 if out_t >= end_t {
-                    // Drum swap: instant cut on the beat. IN drums up,
-                    // OUT drums down. Vols are: OUT=1, IN=1.
                     let _ = self
                         .sender
                         .send(DeckCommand::SetStemDrums { deck: in_deck, gain: 1.0 });
@@ -1219,18 +1315,15 @@ impl DjApp {
                 }
             }
             MixPhase::PhaseC { start_t, end_t } => {
-                let start_t = *start_t;
-                let end_t = *end_t;
                 let frac = ((out_t - start_t) / (end_t - start_t)).clamp(0.0, 1.0) as f32;
-                // OUT deck vol fades 1 → 0 over 16 beats.
                 let _ = self.sender.send(DeckCommand::SetGain {
                     deck: out_deck,
                     gain: 1.0 - frac,
                 });
                 if out_t >= end_t {
-                    // Done — stop OUT deck and reset its state for a
-                    // future load (gain 1, drums 1).
                     let _ = self.sender.send(DeckCommand::Pause(out_deck));
+                    // Restore the OUT deck so a future load starts
+                    // from a clean slate.
                     let _ = self.sender.send(DeckCommand::SetGain {
                         deck: out_deck,
                         gain: 1.0,
@@ -1239,10 +1332,29 @@ impl DjApp {
                         deck: out_deck,
                         gain: 1.0,
                     });
-                    eprintln!("auto-mix: complete");
-                    self.auto_mix = None;
+                    eprintln!("auto-mix: blend complete — re-armed for next");
+                    self.auto_mix = AutoMixState::Armed;
                 }
             }
+        }
+    }
+
+    fn deck_for(&self, d: DeckId) -> &DeckUi {
+        match d {
+            DeckId::A => &self.deck_a,
+            DeckId::B => &self.deck_b,
+        }
+    }
+}
+
+impl MixPhase {
+    /// `Clone` for matching by value; the only fields that exist on
+    /// PhaseA/C are `f64`s so this is a cheap copy.
+    fn clone_for_match(&self) -> MixPhase {
+        match *self {
+            MixPhase::Cueing => MixPhase::Cueing,
+            MixPhase::PhaseA { start_t, end_t } => MixPhase::PhaseA { start_t, end_t },
+            MixPhase::PhaseC { start_t, end_t } => MixPhase::PhaseC { start_t, end_t },
         }
     }
 }
@@ -1283,17 +1395,16 @@ impl eframe::App for DjApp {
                     });
                 }
                 ui.separator();
-                let mix_label = if self.auto_mix.is_some() {
-                    "⏹ Auto-mix (running)"
-                } else {
-                    "▶ Auto-mix"
+                let mix_label = match &self.auto_mix {
+                    AutoMixState::Off => "🔁 Auto-mix",
+                    AutoMixState::Armed => "🔁 Auto-mix (armed)",
+                    AutoMixState::Active(_) => "🔁 Auto-mix (mixing)",
                 };
                 let auto_btn = ui.button(mix_label);
                 if auto_btn.clicked() {
-                    if self.auto_mix.is_some() {
-                        self.cancel_auto_mix();
-                    } else {
-                        self.start_auto_mix();
+                    match self.auto_mix {
+                        AutoMixState::Off => self.arm_auto_mix(),
+                        _ => self.disarm_auto_mix(),
                     }
                 }
                 ui.separator();
@@ -1444,7 +1555,7 @@ impl eframe::App for DjApp {
         // an in-flight auto-mix. The orchestrator's own gain/drum
         // writes go directly through `self.sender` and never set
         // `user_touched`, so they don't self-cancel.
-        if user_touched.get() && self.auto_mix.is_some() {
+        if user_touched.get() && matches!(self.auto_mix, AutoMixState::Active(_)) {
             self.cancel_auto_mix();
         }
     }
