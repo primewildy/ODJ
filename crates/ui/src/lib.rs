@@ -428,8 +428,16 @@ pub struct DjApp {
 
 enum AutoMixState {
     Off,
-    Armed,
+    Armed(ArmedState),
     Active(AutoMixActive),
+}
+
+#[derive(Default)]
+struct ArmedState {
+    /// Path of the track we asked to be pre-loaded onto the idle deck.
+    /// Suppresses duplicate loads while the load is in flight; cleared
+    /// once the deck reports the matching `loaded_path`.
+    pre_load_pending: Option<PathBuf>,
 }
 
 /// Active auto-mix between two decks. Holds enough state to drive the
@@ -514,6 +522,15 @@ impl DjApp {
             cue_gain: 0.15,
             cue_mix: 1.0,
             auto_mix: AutoMixState::Off,
+        }
+    }
+    #[inline]
+    fn auto_mix_label(&self) -> &'static str {
+        match &self.auto_mix {
+            AutoMixState::Off => "🔁 Auto-mix",
+            AutoMixState::Armed(s) if s.pre_load_pending.is_some() => "🔁 Auto-mix (loading)",
+            AutoMixState::Armed(_) => "🔁 Auto-mix (armed)",
+            AutoMixState::Active(_) => "🔁 Auto-mix (mixing)",
         }
     }
 
@@ -1017,8 +1034,11 @@ impl DjApp {
     /// The mode stays on across mixes — each completed blend loops
     /// back to Armed so the next track gets mixed in too.
     fn arm_auto_mix(&mut self) {
-        eprintln!("auto-mix: armed (will mix in next track ~32 beats before end)");
-        self.auto_mix = AutoMixState::Armed;
+        eprintln!("auto-mix: armed — pre-loading next track on idle deck");
+        self.auto_mix = AutoMixState::Armed(ArmedState::default());
+        // Kick off the pre-load straight away so analysis + stems are
+        // ready by the time we actually need to blend.
+        self.maybe_preload_next();
     }
 
     /// Turn auto-mix OFF entirely. If a blend is in flight, abort
@@ -1028,7 +1048,7 @@ impl DjApp {
         let prev = std::mem::replace(&mut self.auto_mix, AutoMixState::Off);
         match prev {
             AutoMixState::Off => {}
-            AutoMixState::Armed => {
+            AutoMixState::Armed(_) => {
                 eprintln!("auto-mix: disarmed");
             }
             AutoMixState::Active(active) => {
@@ -1061,26 +1081,33 @@ impl DjApp {
         }
     }
 
-    /// Kick off an active blend on a specific OUT deck. Picks the
-    /// next track, loads it on the other deck, and transitions to
-    /// `Active { phase: Cueing }`. Returns false if no candidate was
-    /// found (state stays Armed for the next attempt).
+    /// Begin an active blend on a specific OUT deck. Uses whatever
+    /// track is already loaded on the IN deck (pre-loaded by
+    /// `maybe_preload_next`) — that way analysis + stems are ready by
+    /// the time we get here. Returns false if the IN deck doesn't
+    /// have a track yet (state stays Armed; tick will retry).
     fn begin_active_mix(&mut self, out_deck: DeckId) -> bool {
         let in_deck = match out_deck {
             DeckId::A => DeckId::B,
             DeckId::B => DeckId::A,
         };
-        let Some(path) = self.pick_random_next_track() else {
-            eprintln!("auto-mix: no candidate track in current filter");
+        let in_d = self.deck_for(in_deck);
+        let Some(in_path) = in_d.loaded_path.clone() else {
+            // Pre-load hasn't landed yet. Stay armed; retry next tick.
             return false;
         };
+        if in_d.beat_grid.is_empty() {
+            // Track loaded but analysis still in flight.
+            return false;
+        }
         eprintln!(
             "auto-mix: triggering blend out={:?} in={:?} → {}",
             out_deck,
             in_deck,
-            path.file_name().and_then(|s| s.to_str()).unwrap_or("?")
+            in_path.file_name().and_then(|s| s.to_str()).unwrap_or("?")
         );
-        // Mute the incoming deck before loading.
+        // Mute the incoming deck so PhaseA can ramp it up from zero.
+        // (Stems were already muted by maybe_preload_next.)
         let _ = self.sender.send(DeckCommand::SetGain {
             deck: in_deck,
             gain: 0.0,
@@ -1089,15 +1116,73 @@ impl DjApp {
             deck: in_deck,
             gain: 0.0,
         });
-        self.start_load(path.clone(), in_deck);
         self.auto_mix = AutoMixState::Active(AutoMixActive {
             out_deck,
             in_deck,
-            in_path: path,
+            in_path,
             sync_sent: false,
             phase: MixPhase::Cueing,
         });
         true
+    }
+
+    /// If we're Armed and the non-playing deck is empty, pre-load a
+    /// candidate track onto it so it has time to decode + analyse +
+    /// compute stems before we actually need to blend.
+    fn maybe_preload_next(&mut self) {
+        let AutoMixState::Armed(_) = &self.auto_mix else { return };
+        let playing_a = self.deck_a.telemetry.is_playing();
+        let playing_b = self.deck_b.telemetry.is_playing();
+        // Idle deck = the one NOT currently playing. If both or
+        // neither are playing we don't know which side is OUT yet —
+        // wait for clearer state.
+        let idle_deck = if playing_a && !playing_b {
+            DeckId::B
+        } else if playing_b && !playing_a {
+            DeckId::A
+        } else {
+            return;
+        };
+        let idle_loaded = self.deck_for(idle_deck).loaded_path.clone();
+        if idle_loaded.is_some() {
+            // Update the pending-tracker: if this is the track we
+            // asked for, clear pending. If it's a different track,
+            // the user (or post-blend logic) loaded it — respect it.
+            if let AutoMixState::Armed(s) = &mut self.auto_mix {
+                if s.pre_load_pending == idle_loaded {
+                    s.pre_load_pending = None;
+                }
+            }
+            return;
+        }
+        // A load is in flight — wait for it to land.
+        if let AutoMixState::Armed(s) = &self.auto_mix {
+            if s.pre_load_pending.is_some() {
+                return;
+            }
+        }
+        self.force_preload_on(idle_deck);
+    }
+
+    /// Pick a candidate and load it onto a specific deck regardless
+    /// of what's already there. Used right after a blend completes
+    /// to replace the just-finished OUT track on the now-paused deck.
+    fn force_preload_on(&mut self, deck: DeckId) {
+        let Some(path) = self.pick_random_next_track() else {
+            eprintln!("auto-mix: no candidate to pre-load");
+            return;
+        };
+        eprintln!(
+            "auto-mix: pre-loading {} on {:?}",
+            path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
+            deck
+        );
+        let _ = self.sender.send(DeckCommand::SetGain { deck, gain: 0.0 });
+        let _ = self.sender.send(DeckCommand::SetStemDrums { deck, gain: 0.0 });
+        self.start_load(path.clone(), deck);
+        if let AutoMixState::Armed(s) = &mut self.auto_mix {
+            s.pre_load_pending = Some(path);
+        }
     }
 
     /// Apply the current filter + sort (same logic as the track table)
@@ -1177,7 +1262,7 @@ impl DjApp {
     fn tick_auto_mix(&mut self) {
         match self.auto_mix {
             AutoMixState::Off => {}
-            AutoMixState::Armed => self.tick_armed(),
+            AutoMixState::Armed(_) => self.tick_armed(),
             AutoMixState::Active(_) => self.tick_active(),
         }
     }
@@ -1200,11 +1285,18 @@ impl DjApp {
         let out_d = self.deck_for(out_deck);
         let bpm = out_d.bpm;
         if bpm <= 0.0 || out_d.beat_grid.is_empty() || out_d.total_frames == 0 || out_d.sample_rate == 0 {
+            // Pre-load the next track even while we wait for the
+            // playing deck's analysis to land.
+            self.maybe_preload_next();
             return;
         }
         let total_secs = out_d.total_frames as f64 / out_d.sample_rate as f64;
         let out_t = out_d.playhead_secs();
         let remaining = total_secs - out_t;
+        // Always poll for pre-load — handles initial arm, blend
+        // completion, and the case where the user cleared the idle
+        // deck manually. Cheap when nothing changed.
+        self.maybe_preload_next();
         // 48 beats of headroom: up to 16 beats waiting for the next
         // red line, then 32 beats of blend. Trigger when remaining
         // drops below that.
@@ -1213,9 +1305,10 @@ impl DjApp {
         if remaining > trigger_at {
             return;
         }
-        // Try to start a blend. If no candidate is found we stay
-        // Armed — the next tick will try again and eventually we'll
-        // run out of track and just stop.
+        // Try to start a blend. If the IN deck isn't loaded /
+        // analysed yet, we stay Armed and retry next tick (a few
+        // frames later it'll be ready, since pre-load fired
+        // minutes ago).
         self.begin_active_mix(out_deck);
     }
 
@@ -1333,7 +1426,11 @@ impl DjApp {
                         gain: 1.0,
                     });
                     eprintln!("auto-mix: blend complete — re-armed for next");
-                    self.auto_mix = AutoMixState::Armed;
+                    self.auto_mix = AutoMixState::Armed(ArmedState::default());
+                    // The just-paused deck still has the old track
+                    // loaded; force-replace it so the next blend has
+                    // analysis + stems ready well in advance.
+                    self.force_preload_on(out_deck);
                 }
             }
         }
@@ -1395,12 +1492,7 @@ impl eframe::App for DjApp {
                     });
                 }
                 ui.separator();
-                let mix_label = match &self.auto_mix {
-                    AutoMixState::Off => "🔁 Auto-mix",
-                    AutoMixState::Armed => "🔁 Auto-mix (armed)",
-                    AutoMixState::Active(_) => "🔁 Auto-mix (mixing)",
-                };
-                let auto_btn = ui.button(mix_label);
+                let auto_btn = ui.button(self.auto_mix_label());
                 if auto_btn.clicked() {
                     match self.auto_mix {
                         AutoMixState::Off => self.arm_auto_mix(),
