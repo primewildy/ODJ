@@ -1271,18 +1271,23 @@ impl DjApp {
     }
 
     fn tick_armed(&mut self) {
-        // Pick whichever deck is currently playing as OUT. If neither
-        // is playing (just-started session, or both done) we can't
-        // trigger yet.
         let playing_a = self.deck_a.telemetry.is_playing();
         let playing_b = self.deck_b.telemetry.is_playing();
         let out_deck = if playing_a && !playing_b {
             DeckId::A
         } else if playing_b && !playing_a {
             DeckId::B
+        } else if !playing_a && !playing_b {
+            // No deck is playing — either initial state or the playing
+            // track ran past its end before our 48-beat trigger fired
+            // (engine sets deck.playing=false at end of buffer). If we
+            // already have a track loaded with analysis, just start it.
+            // No blend possible — there's nothing to fade out of.
+            self.maybe_start_idle();
+            return;
         } else {
-            // Both playing → mid-mix shouldn't reach here. Neither
-            // playing → wait.
+            // Both playing — shouldn't happen in Armed; an Active mix
+            // would catch this. Wait.
             return;
         };
         let out_d = self.deck_for(out_deck);
@@ -1341,11 +1346,66 @@ impl DjApp {
         if remaining > trigger_at {
             return;
         }
-        // Try to start a blend. If the IN deck isn't loaded /
-        // analysed yet, we stay Armed and retry next tick (a few
-        // frames later it'll be ready, since pre-load fired
-        // minutes ago).
+        // Trigger window — try to begin a blend. Log every attempt so
+        // silent bails (IN deck not ready yet) are visible. Once we
+        // succeed begin_active_mix sets state to Active and we won't
+        // be back here until the blend completes.
+        let in_deck = match out_deck { DeckId::A => DeckId::B, DeckId::B => DeckId::A };
+        let in_d = self.deck_for(in_deck);
+        if in_d.loaded_path.is_none() {
+            eprintln!("auto-mix: trigger fired but idle deck has no track — skipping blend");
+            return;
+        }
+        if in_d.beat_grid.is_empty() {
+            eprintln!("auto-mix: trigger fired but idle deck still analysing — waiting");
+            return;
+        }
+        eprintln!(
+            "auto-mix: trigger fired — {:.0}s ({} beats) remaining on {:?}",
+            remaining,
+            (remaining / bar_secs).round() as i64,
+            out_deck
+        );
         self.begin_active_mix(out_deck);
+    }
+
+    /// Neither deck is playing but we want to keep the auto-mix loop
+    /// alive. If a deck has a ready track loaded (typically the
+    /// pre-loaded next track), start it. Then queue another candidate
+    /// onto the other deck so we're set up for the next blend.
+    fn maybe_start_idle(&mut self) {
+        let candidate = if self.deck_a.loaded_path.is_some() && !self.deck_a.beat_grid.is_empty() {
+            Some(DeckId::A)
+        } else if self.deck_b.loaded_path.is_some() && !self.deck_b.beat_grid.is_empty() {
+            Some(DeckId::B)
+        } else {
+            None
+        };
+        let Some(d) = candidate else { return };
+        eprintln!(
+            "auto-mix: no playing deck — starting {:?} ({}) fresh",
+            d,
+            self.deck_for(d)
+                .loaded_path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+                .unwrap_or("?")
+        );
+        // Make sure gain + stems are at full (the deck may have been
+        // muted by an earlier pre-load).
+        let _ = self.sender.send(DeckCommand::SetGain { deck: d, gain: 1.0 });
+        let _ = self.sender.send(DeckCommand::SetStemDrums { deck: d, gain: 1.0 });
+        let _ = self.sender.send(DeckCommand::Play(d));
+        // Reset heartbeat so the user sees the new watch begin from
+        // its initial state.
+        if let AutoMixState::Armed(s) = &mut self.auto_mix {
+            s.last_status_log = None;
+        }
+        // Queue another candidate on the other deck so the next mix
+        // is already in motion.
+        let other = match d { DeckId::A => DeckId::B, DeckId::B => DeckId::A };
+        self.force_preload_on(other);
     }
 
     fn tick_active(&mut self) {
