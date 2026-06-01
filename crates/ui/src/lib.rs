@@ -438,6 +438,9 @@ struct ArmedState {
     /// Suppresses duplicate loads while the load is in flight; cleared
     /// once the deck reports the matching `loaded_path`.
     pre_load_pending: Option<PathBuf>,
+    /// OUT-deck playhead at the last status heartbeat. Used to throttle
+    /// the "watching, X beats remaining" log.
+    last_status_log: Option<f64>,
 }
 
 /// Active auto-mix between two decks. Holds enough state to drive the
@@ -1302,6 +1305,39 @@ impl DjApp {
         // drops below that.
         let bar_secs = 60.0 / bpm as f64;
         let trigger_at = 48.0 * bar_secs;
+        // Heartbeat: log roughly every 30 s of OUT progress so the
+        // user can see the watch is alive while waiting for the end
+        // of the track.
+        let should_log = match &self.auto_mix {
+            AutoMixState::Armed(s) => s
+                .last_status_log
+                .map(|prev| (out_t - prev).abs() > 30.0)
+                .unwrap_or(true),
+            _ => false,
+        };
+        if should_log {
+            let beats_remaining = (remaining / bar_secs).round() as i64;
+            let in_deck = match out_deck { DeckId::A => DeckId::B, DeckId::B => DeckId::A };
+            let in_d = self.deck_for(in_deck);
+            let in_state = match (&in_d.loaded_path, in_d.beat_grid.is_empty()) {
+                (None, _) => "idle deck empty".to_string(),
+                (Some(p), true) => format!(
+                    "idle deck loading {}",
+                    p.file_name().and_then(|s| s.to_str()).unwrap_or("?")
+                ),
+                (Some(p), false) => format!(
+                    "idle deck ready: {}",
+                    p.file_name().and_then(|s| s.to_str()).unwrap_or("?")
+                ),
+            };
+            eprintln!(
+                "auto-mix: watching {:?} — {:.0}s ({} beats) until blend, {}",
+                out_deck, remaining, beats_remaining, in_state
+            );
+            if let AutoMixState::Armed(s) = &mut self.auto_mix {
+                s.last_status_log = Some(out_t);
+            }
+        }
         if remaining > trigger_at {
             return;
         }
