@@ -187,6 +187,20 @@ pub struct Engine {
     sender: Sender,
     deck_a_tel: DeckTelemetry,
     deck_b_tel: DeckTelemetry,
+    /// Engine output sample rate (cpal-chosen for the master stream).
+    /// Exposed via `sample_rate()` so the network-output HTTP server
+    /// can advertise the right rate in its MIME type.
+    sample_rate: u32,
+    /// Engine output channel count (master stream). Same purpose.
+    out_channels: u16,
+    /// Consumer end of the SPSC ring that mirrors the post-master mix
+    /// for the network-output feature (FEATURES.md / DESIGN.md — Naim
+    /// UPnP MediaRenderer streaming). Allocated unconditionally at
+    /// engine start; the audio thread always pushes into the matching
+    /// Producer and drops samples when the ring is full. The UI
+    /// `take_network_consumer()`s this when it first spins up the
+    /// HTTP server. Subsequent calls return None.
+    network_consumer: Mutex<Option<rtrb::Consumer<f32>>>,
 }
 
 impl Engine {
@@ -313,6 +327,17 @@ impl Engine {
         let (prod, cons) = control::channel(RING_CAPACITY);
         let deck_a_tel = DeckTelemetry::new();
         let deck_b_tel = DeckTelemetry::new();
+        // Network-output ring: SPSC f32 buffer sized to ~1 second of
+        // stereo audio at the engine sample rate, so the HTTP server
+        // can absorb brief stalls without making the audio thread
+        // drop. Always allocated; the audio thread always pushes;
+        // when no consumer is draining (no renderer selected) the
+        // ring just stays full and pushes drop silently. Cheap idle.
+        let net_capacity = (sample_rate as usize)
+            .saturating_mul(channels as usize)
+            .max(1024);
+        let (network_producer, network_consumer) =
+            rtrb::RingBuffer::<f32>::new(net_capacity);
         // Retire ring: audio thread pushes old Arcs here, drain thread
         // pops + drops them. Capacity is conservative — even at one
         // LoadTrack/sec we'd need 64 seconds of drain-thread starvation
@@ -343,6 +368,7 @@ impl Engine {
             deck_a_tel.clone(),
             deck_b_tel.clone(),
             cue_producer,
+            network_producer,
             retire_producer,
         )
         .context("building master output stream")?;
@@ -386,11 +412,36 @@ impl Engine {
             },
             deck_a_tel,
             deck_b_tel,
+            sample_rate,
+            out_channels: channels,
+            network_consumer: Mutex::new(Some(network_consumer)),
         })
     }
 
     pub fn sender(&self) -> Sender {
         self.sender.clone()
+    }
+
+    /// Sample rate the master output is running at. Set by cpal at
+    /// stream construction. Needed by the network-output HTTP server
+    /// to advertise the correct `audio/L16; rate=N` MIME type.
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    /// Channel count of the master output (1 = mono, 2 = stereo, …).
+    /// L16 MIME advertises this.
+    pub fn out_channels(&self) -> u16 {
+        self.out_channels
+    }
+
+    /// Hand over the network-output ring consumer to the HTTP server
+    /// (one-time take — subsequent calls return None). The audio
+    /// thread keeps pushing into the producer regardless; pushes drop
+    /// silently when the ring is full, so it's harmless if this
+    /// consumer is never taken.
+    pub fn take_network_consumer(&self) -> Option<rtrb::Consumer<f32>> {
+        self.network_consumer.lock().ok().and_then(|mut g| g.take())
     }
 
     pub fn send(&self, cmd: DeckCommand) -> Result<()> {
@@ -633,6 +684,13 @@ struct Mixer {
     /// Lock-free SPSC producer to the cue stream's callback. None if no
     /// cue device was configured at engine start.
     cue_producer: Option<rtrb::Producer<f32>>,
+    /// Lock-free SPSC producer feeding the post-master mix to the
+    /// network-output HTTP server (UPnP MediaRenderer streaming). The
+    /// audio thread pushes interleaved f32 frames; the HTTP server
+    /// drains, converts to L16 PCM, writes to the renderer. When no
+    /// renderer is selected (no consumer connected), the ring fills
+    /// and pushes drop silently. Always allocated at engine start.
+    network_producer: rtrb::Producer<f32>,
     /// Linear gain on the headphone bus. 1.0 = unity.
     cue_gain: f32,
     /// CUE↔MASTER blend in the headphones. 0 = pure master, 1 = pure cue.
@@ -1263,6 +1321,23 @@ impl Mixer {
                     break;
                 }
                 for s in &self.cue_scratch[i..i + out_channels] {
+                    let _ = prod.push(*s);
+                }
+                i += out_channels;
+            }
+        }
+
+        // Network-output tap: push the post-master mix into the
+        // network ring for the UPnP HTTP server. Same frame-aligned
+        // discipline as the cue tap. When no renderer is selected the
+        // consumer side never drains, the ring fills, and these
+        // pushes drop silently — no allocation, no lock, no I/O.
+        {
+            let prod = &mut self.network_producer;
+            let mut i = 0;
+            while i + out_channels <= needed {
+                if prod.slots() < out_channels { break; }
+                for s in &out[i..i + out_channels] {
                     let _ = prod.push(*s);
                 }
                 i += out_channels;
@@ -1913,6 +1988,7 @@ fn build_stream(
     deck_a_tel: DeckTelemetry,
     deck_b_tel: DeckTelemetry,
     cue_producer: Option<rtrb::Producer<f32>>,
+    network_producer: rtrb::Producer<f32>,
     retire_producer: rtrb::Producer<RetiredArc>,
 ) -> Result<Stream> {
     let mut mixer = Mixer {
@@ -1924,6 +2000,7 @@ fn build_stream(
         scratch: Vec::with_capacity(4096),
         cue_scratch: Vec::with_capacity(4096),
         cue_producer,
+        network_producer,
         cue_gain: 0.15,
         cue_mix: 1.0,
         master_gain: 1.0,

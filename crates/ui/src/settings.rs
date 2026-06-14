@@ -56,6 +56,28 @@ pub struct Settings {
     /// from main.rs is `"ODJ,LPD8"`.
     #[serde(default)]
     pub midi_port: Option<String>,
+    /// UPnP MediaRenderer to stream the master mix to. Stored as the
+    /// device's UDN (e.g. `uuid:d110347e-…`) so renaming the speaker
+    /// or its IP changing doesn't break the binding. `None` = off.
+    #[serde(default)]
+    pub network_renderer_udn: Option<String>,
+    /// Last-known device-description URL for the pinned renderer.
+    /// Saved alongside the UDN whenever the user picks a renderer
+    /// (and refreshed when SSDP later returns a different URL for
+    /// the same UDN). The discovery loop direct-probes this URL each
+    /// sweep so an SSDP-silent renderer (typical Qute post-standby)
+    /// stays controllable as long as its HTTP server answers.
+    #[serde(default)]
+    pub network_renderer_descriptor_url: Option<String>,
+    /// Cache of every renderer descriptor URL we've ever discovered.
+    /// The discovery loop direct-probes all of these each sweep on
+    /// top of the SSDP broadcast, so a renderer that drops off SSDP
+    /// (Qute / older NaimUniti post-standby behaviour) still shows
+    /// in the picker as long as its HTTP server answers. Saves the
+    /// user from needing to wake every device into SSDP before they
+    /// can pick it — once seen, always findable.
+    #[serde(default)]
+    pub known_renderer_urls: Vec<String>,
     /// Mirror every MIDI message to stderr. Useful when wiring a new
     /// controller; noisy in regular use.
     #[serde(default = "default_true")]
@@ -83,6 +105,9 @@ impl Default for Settings {
             audio_device: None,
             cue_device: None,
             midi_port: None,
+            network_renderer_udn: None,
+            network_renderer_descriptor_url: None,
+            known_renderer_urls: Vec::new(),
             log_midi: true,
             deck_a: DeckDefaults::default(),
             deck_b: DeckDefaults::default(),

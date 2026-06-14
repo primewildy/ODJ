@@ -6,10 +6,12 @@ mod auto_mix;
 pub mod fonts;
 mod grid_edit;
 mod history;
+mod network_output;
 pub mod palette;
 mod persistence;
 pub mod settings;
 pub mod theme;
+mod upnp;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -567,6 +569,16 @@ pub struct DjApp {
     effective: settings::EffectiveDefaults,
     /// Settings window open/closed (egui::Window's `open` flag).
     settings_open: bool,
+    /// Background SSDP discovery for UPnP MediaRenderers on the LAN.
+    /// Populates the "Stream to room" dropdown in the settings window;
+    /// the actual stream wiring lands in the next commit.
+    upnp_discovery: upnp::DiscoveryHandle,
+    /// Local HTTP server that serves the post-master mix as raw L16
+    /// PCM to a UPnP renderer. Spawned lazily on first selection (or
+    /// on app start if a renderer is already persisted). Stays alive
+    /// for the rest of the session — toggling the "Stream to room"
+    /// setting just flips its `enabled` gate.
+    network_output: Option<network_output::NetworkOutput>,
     /// Cached filtered+sorted track index list, with a fingerprint of
     /// the inputs used to produce it. Re-using the cache on frames
     /// where nothing changed avoids the per-frame
@@ -727,6 +739,51 @@ impl DjApp {
         }
         .spawn();
 
+        // Spawn the network-output HTTP server eagerly. URL is then
+        // stable for the whole session and survives the user
+        // toggling renderer selections (we just flip its `enabled`
+        // gate). If the audio engine's network consumer was already
+        // taken (defensive — shouldn't happen) or the listener bind
+        // fails (rare; privileged-port-only systems, etc.), the
+        // feature stays inert and the settings dropdown still works
+        // for the discovery aspect — it just won't make sound.
+        let network_output = engine.take_network_consumer().and_then(|consumer| {
+            match network_output::NetworkOutput::spawn(
+                consumer,
+                engine.sample_rate(),
+                engine.out_channels(),
+            ) {
+                Ok(no) => Some(no),
+                Err(e) => {
+                    eprintln!("network-output: spawn failed: {e}");
+                    None
+                }
+            }
+        });
+        // Honour persisted "Stream to room" — if settings.toml has
+        // a renderer pinned, flip the gate on right away so the
+        // feature is live as soon as the engine starts pushing.
+        // (§3 will additionally fire the SOAP Play command when it
+        // sees the renderer come up in discovery.)
+        if settings.network_renderer_udn.is_some() {
+            if let Some(no) = network_output.as_ref() {
+                no.enable();
+            }
+        }
+
+        // Take the renderer URL cache out of settings before we move
+        // `settings` into the struct literal below. The SSDP
+        // discovery thread direct-probes each of these every sweep,
+        // so any device we've ever discovered stays in the picker
+        // even when it's SSDP-silent (typical Qute post-standby).
+        // Includes the pinned descriptor URL as a hot path.
+        let mut upnp_seeds: Vec<String> = settings.known_renderer_urls.clone();
+        if let Some(pinned) = &settings.network_renderer_descriptor_url {
+            if !upnp_seeds.contains(pinned) {
+                upnp_seeds.push(pinned.clone());
+            }
+        }
+
         Self {
             engine,
             sender,
@@ -768,6 +825,8 @@ impl DjApp {
             log_midi,
             effective,
             settings_open: false,
+            upnp_discovery: upnp::DiscoveryHandle::spawn(upnp_seeds),
+            network_output,
         }
     }
     fn deck_mut(&mut self, deck: DeckId) -> &mut DeckUi {
@@ -1923,6 +1982,77 @@ impl DjApp {
                                 std::sync::atomic::Ordering::Relaxed,
                             );
                             changed = true;
+                        }
+                        ui.end_row();
+
+                        // Stream-to-room dropdown — populated from
+                        // the live SSDP discovery. Persisted as the
+                        // device UDN so renaming the speaker / its IP
+                        // changing won't break the binding next launch.
+                        // Selecting any renderer flips the HTTP
+                        // server's gate on so the audio actually
+                        // starts flowing. §3 will additionally send
+                        // SetAVTransportURI + Play to the renderer
+                        // so it pulls the stream.
+                        ui.label("Stream to room");
+                        let renderers = self.upnp_discovery.renderers();
+                        // Cache every discovered URL into settings —
+                        // the discovery loop direct-probes the full
+                        // set every sweep, so a device only needs to
+                        // be SSDP-visible *once* (on any past launch)
+                        // to stay findable forever, even when its
+                        // advertiser later sleeps.
+                        let mut cache_dirty = false;
+                        for r in &renderers {
+                            if !self.settings.known_renderer_urls.contains(&r.descriptor_url) {
+                                self.settings.known_renderer_urls.push(r.descriptor_url.clone());
+                                cache_dirty = true;
+                            }
+                        }
+                        if cache_dirty {
+                            self.upnp_discovery.set_seed_urls(
+                                self.settings.known_renderer_urls.clone(),
+                            );
+                            changed = true;
+                        }
+
+                        if renderer_combo(
+                            ui,
+                            "settings-renderer",
+                            &mut self.settings.network_renderer_udn,
+                            &renderers,
+                        ) {
+                            changed = true;
+                            // Save the descriptor URL alongside the
+                            // UDN so the discovery thread can direct-
+                            // probe the renderer next session — even
+                            // if its SSDP advertiser is silent.
+                            self.settings.network_renderer_descriptor_url =
+                                self.settings.network_renderer_udn.as_ref()
+                                    .and_then(|udn| renderers.iter().find(|r| &r.udn == udn))
+                                    .map(|r| r.descriptor_url.clone());
+                            if let Some(no) = self.network_output.as_ref() {
+                                if self.settings.network_renderer_udn.is_some() {
+                                    no.enable();
+                                } else {
+                                    no.disable();
+                                }
+                            }
+                        }
+                        // Keep the persisted URL fresh when SSDP
+                        // returns a different one for the pinned UDN
+                        // (e.g. DHCP gave the speaker a new IP). The
+                        // user doesn't see this — it just self-heals.
+                        if let Some(udn) = &self.settings.network_renderer_udn {
+                            if let Some(live) = renderers.iter().find(|r| &r.udn == udn) {
+                                if self.settings.network_renderer_descriptor_url.as_deref()
+                                    != Some(live.descriptor_url.as_str())
+                                {
+                                    self.settings.network_renderer_descriptor_url =
+                                        Some(live.descriptor_url.clone());
+                                    changed = true;
+                                }
+                            }
                         }
                         ui.end_row();
                     });
@@ -4757,6 +4887,51 @@ fn midi_combo(
                 let sel = target.as_deref() == Some(p.as_str());
                 if ui.selectable_label(sel, p).clicked() && !sel {
                     *target = Some(p.clone());
+                    changed = true;
+                }
+            }
+        });
+    changed
+}
+
+/// Settings ComboBox for the "Stream to room" UPnP MediaRenderer
+/// picker. Persists the device's UDN (so renaming or re-IPing doesn't
+/// break the binding); shows the live friendly name + IP. If the
+/// persisted selection isn't currently visible on the LAN, we keep
+/// the UDN but flag it as offline so the user knows.
+fn renderer_combo(
+    ui: &mut egui::Ui,
+    id: &str,
+    target: &mut Option<String>,
+    renderers: &[upnp::Renderer],
+) -> bool {
+    let none_label = "(off — local audio only)";
+    let display = match target {
+        None => none_label.to_string(),
+        Some(udn) => match renderers.iter().find(|r| &r.udn == udn) {
+            Some(r) => format!("{} ({})", r.name, r.address),
+            None => format!("(offline) {udn}"),
+        },
+    };
+    let mut changed = false;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(display)
+        .width(280.0)
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(target.is_none(), none_label).clicked() {
+                if target.is_some() {
+                    *target = None;
+                    changed = true;
+                }
+            }
+            if renderers.is_empty() {
+                ui.weak("(no UPnP renderers on the LAN — scanning…)");
+            }
+            for r in renderers {
+                let sel = target.as_deref() == Some(r.udn.as_str());
+                let label = format!("{}  ·  {}", r.name, r.address);
+                if ui.selectable_label(sel, label).clicked() && !sel {
+                    *target = Some(r.udn.clone());
                     changed = true;
                 }
             }
