@@ -601,6 +601,16 @@ pub struct DjApp {
     /// overrides and saved loops later. Persisted in `.track-meta`
     /// next to the analysis cache.
     track_meta: persistence::TrackMetaStore,
+    /// Playlist tree (mirrors `<music-dir>/.playlists/`). Read on the
+    /// UI thread, modified by right-click menus in § 5. The store's
+    /// `generation()` counter invalidates the filter/sort cache so a
+    /// freshly-added track lands in the table immediately.
+    playlists: persistence::PlaylistStore,
+    /// The leaf playlist whose contents currently fill the track
+    /// table. `None` = normal library filter via `library_source`.
+    /// Set when the user clicks a playlist in the source rail;
+    /// cleared by selecting any non-playlist source.
+    active_playlist: Option<Vec<String>>,
     /// Per-deck: the loaded_path we already logged for the current
     /// LoadTrack. None means "nothing logged for whatever's loaded
     /// now"; a Some(path) acts as a sticky latch — we won't log
@@ -710,6 +720,12 @@ struct FilterSortKey {
     favourites_len: usize,
     analysis_gen: u64,
     history_gen: u64,
+    /// When `Some`, the table renders that playlist's tracks in
+    /// playlist order rather than the standard filtered library. The
+    /// path identifies the leaf; the playlists_gen bump ensures the
+    /// cache invalidates if the underlying file changes.
+    active_playlist: Option<Vec<String>>,
+    playlists_gen: u64,
 }
 
 impl DjApp {
@@ -739,6 +755,7 @@ impl DjApp {
         let favourites = Favourites::load(&music_dir);
         let history = history::HistoryStore::load(&music_dir);
         let track_meta = persistence::TrackMetaStore::load(&music_dir);
+        let playlists = persistence::PlaylistStore::load(&music_dir);
         let analysis_progress = Arc::new(AtomicUsize::new(analysis_cache.count()));
         let analysis_total = tracks.len();
 
@@ -845,6 +862,8 @@ impl DjApp {
             filter_sort_cache: None,
             history,
             track_meta,
+            playlists,
+            active_playlist: None,
             deck_logged_path: [None, None],
             browser_tab: BrowserTab::Tracks,
             library_source: LibrarySource::AllTracks,
@@ -1014,6 +1033,13 @@ impl DjApp {
                 collapsed,
             ) {
                 self.library_source = src;
+                // Any root-level source switch unpins the active
+                // playlist (otherwise it'd still filter the track
+                // table). Genres/Playlists drill-down handles its
+                // own pin/unpin separately.
+                if !matches!(src, LibrarySource::Playlists) {
+                    self.active_playlist = None;
+                }
                 match src {
                     LibrarySource::AllTracks => {
                         self.favourites_only = false;
@@ -1049,31 +1075,31 @@ impl DjApp {
                 }
             }
         }
+        // Self-heal a stale active_playlist (deleted via § 5, etc.).
+        if let Some(p) = self.active_playlist.clone() {
+            if self.playlists.playlist_tracks(&p).is_none() {
+                self.active_playlist = None;
+            }
+        }
     }
 
-    /// Playlists drill-down at `path`. § 2 only paints the chrome
-    /// (Back button + header + empty-state message); § 4 wires the
-    /// real PlaylistStore tree.
+    /// Playlists drill-down at `path`. Renders the children at that
+    /// path: sub-folders (📁) drill in, leaf playlists (♫) become
+    /// the active filter for the track table.
     fn render_rail_playlists(&mut self, ui: &mut egui::Ui, collapsed: bool, path: &[String]) {
         let pal = palette::for_ui(ui);
-        // Back-out affordance. From any depth, click pops one level
-        // — empty path goes back to Root, non-empty pops a segment.
+        // Back-out affordance. Empty path → Root; non-empty pops a
+        // segment.
         if source_rail_item(ui, "‹", "Back", false, collapsed) {
-            self.source_rail_view = match path.split_last() {
-                Some((_, init)) if !init.is_empty() || !path.is_empty() => {
-                    if path.len() <= 1 {
-                        SourceRailView::Root
-                    } else {
-                        SourceRailView::PlaylistsAt { path: init.to_vec() }
-                    }
-                }
-                _ => SourceRailView::Root,
+            self.source_rail_view = if path.is_empty() {
+                SourceRailView::Root
+            } else {
+                let mut parent = path.to_vec();
+                parent.pop();
+                SourceRailView::PlaylistsAt { path: parent }
             };
             return;
         }
-        // Breadcrumb header. Empty path = "Playlists" alone; deeper
-        // shows the trailing folder name so the user knows where
-        // they are without a full crumb trail (rail is narrow).
         if !collapsed {
             let label = if path.is_empty() {
                 "Playlists".to_string()
@@ -1083,10 +1109,68 @@ impl DjApp {
             ui.colored_label(pal.muted, egui::RichText::new(label).small().strong());
             ui.add_space(2.0);
         }
-        // § 2: no data yet. Empty-state placeholder. § 4 replaces
-        // this with the real PlaylistStore tree.
-        if !collapsed {
-            ui.colored_label(pal.faint, egui::RichText::new("(no playlists yet)").small());
+
+        // Snapshot the children at the current path. Cloning the
+        // shape we need keeps borrow rules quiet — the iteration's
+        // click handlers want `&mut self`.
+        let children: Vec<(String, bool)> = match self.playlists.children_at(path) {
+            Some(nodes) => nodes.iter()
+                .map(|n| (n.name().to_string(), n.is_folder()))
+                .collect(),
+            None => {
+                if !collapsed {
+                    ui.colored_label(
+                        pal.faint,
+                        egui::RichText::new("(folder no longer exists)").small(),
+                    );
+                }
+                return;
+            }
+        };
+
+        if children.is_empty() {
+            if !collapsed {
+                let msg = if path.is_empty() {
+                    "(no playlists yet — right-click to create)"
+                } else {
+                    "(empty folder)"
+                };
+                ui.colored_label(pal.faint, egui::RichText::new(msg).small());
+            }
+            return;
+        }
+
+        // Render folders + playlists.
+        for (name, is_folder) in children {
+            let icon = if is_folder { "📁" } else { "♫" };
+            // Active highlight: a playlist is "selected" when it's
+            // the active filter for the track table. Folders never
+            // highlight (they're just navigators).
+            let selected = if is_folder {
+                false
+            } else {
+                let mut full = path.to_vec();
+                full.push(name.clone());
+                self.active_playlist.as_ref() == Some(&full)
+            };
+            if source_rail_item(ui, icon, &name, selected, collapsed) {
+                if is_folder {
+                    // Drill in.
+                    let mut next = path.to_vec();
+                    next.push(name);
+                    self.source_rail_view = SourceRailView::PlaylistsAt { path: next };
+                } else {
+                    // Pin this playlist as the active filter. Stays
+                    // on the same drill-down level so the user can
+                    // swap between sibling playlists quickly.
+                    let mut leaf = path.to_vec();
+                    leaf.push(name);
+                    self.active_playlist = Some(leaf);
+                    self.browser_tab = BrowserTab::Tracks;
+                    self.favourites_only = false;
+                    self.genre_filter = None;
+                }
+            }
         }
     }
 
@@ -1555,12 +1639,39 @@ impl DjApp {
             favourites_len: self.favourites.paths().len(),
             analysis_gen: self.analysis_cache.generation(),
             history_gen: self.history.generation(),
+            active_playlist: self.active_playlist.clone(),
+            playlists_gen: self.playlists.generation(),
         };
         if self.filter_sort_cache.as_ref().map(|(k, _)| k) != Some(&key) {
             let filter_lower = &key.filter_lower;
             let favs_only = key.favs_only;
             let genre_filter = key.genre_filter.as_deref();
             let harmonic_active = harmonic_target.is_some();
+
+            // Playlist mode: iterate the playlist's tracks in order
+            // and resolve each path against the library. Tracks that
+            // aren't in the library (deleted / moved files; rare in
+            // practice but possible) silently drop. Sort headers are
+            // ignored in playlist mode — the user explicitly asked
+            // for *this* order. If they want a sort, they can switch
+            // back to All Tracks first.
+            if let Some(pl_path) = &key.active_playlist {
+                let pl_tracks = self.playlists.playlist_tracks(pl_path);
+                let path_to_idx: std::collections::HashMap<&Path, usize> = self
+                    .tracks
+                    .iter()
+                    .enumerate()
+                    .map(|(i, m)| (m.path.as_path(), i))
+                    .collect();
+                let indices: Vec<usize> = pl_tracks
+                    .map(|paths| {
+                        paths.iter()
+                            .filter_map(|p| path_to_idx.get(p.as_path()).copied())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.filter_sort_cache = Some((key, indices));
+            } else {
 
             // Precompute a (title_lower, artist_lower, genre_lower)
             // tuple per track so the sort comparator stops allocating
@@ -1656,6 +1767,7 @@ impl DjApp {
                 if sort.ascending { ord } else { ord.reverse() }
             });
             self.filter_sort_cache = Some((key, indices));
+            }
         }
         let filtered_sorted: &[usize] = self
             .filter_sort_cache
