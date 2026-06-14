@@ -619,11 +619,34 @@ pub struct DjApp {
     library_source: LibrarySource,
     /// Source rail collapsed state (icons only, narrower).
     source_rail_collapsed: bool,
+    /// Drill-down state for the left source rail. `Root` shows the
+    /// top-level items (All / Playlists / Genres / Favourites / …).
+    /// `PlaylistsAt` shows the playlist tree at `path` (empty path =
+    /// `.playlists/` root). `Genres` shows the unique-genre list.
+    /// All non-Root views render a "← Back" affordance that pops one
+    /// level (or returns to Root from the top-level drill-in).
+    source_rail_view: SourceRailView,
     /// Which deck the Grid Adjust panel is targeting.
     grid_edit_deck: DeckId,
     /// Edits gated until the user unlocks. Resets to locked on app
     /// start so an accidental tab-click can't mangle a grid.
     grid_edit_unlocked: bool,
+}
+
+/// Drill-down state of the left source rail. Most views are "Root +
+/// a filter" (one level), but Playlists is genuinely tree-shaped so
+/// the rail walks into it. Persisted in memory only — every launch
+/// starts at `Root` so the user always sees the familiar top-level
+/// chrome first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SourceRailView {
+    Root,
+    /// Folder path within `.playlists/`. Empty = root of the playlist
+    /// tree (so clicking a playlist or descending into a folder
+    /// updates this path).
+    PlaylistsAt { path: Vec<String> },
+    /// Flat list of unique genre strings derived from TrackMeta.
+    Genres,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -828,6 +851,7 @@ impl DjApp {
             grid_edit_deck: DeckId::A,
             grid_edit_unlocked: false,
             source_rail_collapsed: false,
+            source_rail_view: SourceRailView::Root,
             settings,
             log_midi,
             effective,
@@ -956,6 +980,21 @@ impl DjApp {
         });
         ui.separator();
 
+        // Dispatch to the active drill-down view. Each branch is
+        // responsible for its own back-button + header + list.
+        // Cloning the view here keeps borrow rules quiet — the user
+        // may transition it during a click handler.
+        match self.source_rail_view.clone() {
+            SourceRailView::Root => self.render_rail_root(ui, collapsed),
+            SourceRailView::PlaylistsAt { path } => self.render_rail_playlists(ui, collapsed, &path),
+            SourceRailView::Genres => self.render_rail_genres(ui, collapsed),
+        }
+    }
+
+    /// Root-level rail: the 7 top-level items. Clicking Playlists /
+    /// Genres drills into the corresponding view; the rest behave
+    /// the same as before (toggle filter, swap browser tab).
+    fn render_rail_root(&mut self, ui: &mut egui::Ui, collapsed: bool) {
         const SOURCES: [LibrarySource; 7] = [
             LibrarySource::AllTracks,
             LibrarySource::Playlists,
@@ -967,54 +1006,14 @@ impl DjApp {
         ];
         for src in SOURCES {
             let selected = self.library_source == src;
-            let item_color = if selected { pal.accent_blue } else { pal.muted };
-            // Use the button as a click target, then paint our own
-            // [icon] [label] split inside the button rect so the
-            // icon column is fixed-width and labels left-align
-            // regardless of glyph-width variations.
-            let h = 24.0;
-            let w = if collapsed { 40.0 } else { 110.0 };
-            let (rect, r) = ui.allocate_exact_size(
-                egui::Vec2::new(w, h),
-                egui::Sense::click(),
-            );
-            // Background + hover tint.
-            let bg = if selected {
-                with_opacity(pal.accent_blue, 0.18)
-            } else if r.hovered() {
-                pal.raised
-            } else {
-                egui::Color32::TRANSPARENT
-            };
-            let painter = ui.painter_at(rect);
-            if bg != egui::Color32::TRANSPARENT {
-                painter.rect_filled(rect, 8.0, bg);
-            }
-            // Icon column (fixed-width).
-            let icon_x = rect.left() + 14.0;
-            painter.text(
-                egui::Pos2::new(icon_x, rect.center().y),
-                egui::Align2::CENTER_CENTER,
+            if source_rail_item(
+                ui,
                 src.icon(),
-                egui::FontId::proportional(15.0),
-                item_color,
-            );
-            // Label (skipped when collapsed).
-            if !collapsed {
-                painter.text(
-                    egui::Pos2::new(icon_x + 16.0, rect.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    src.label(),
-                    egui::FontId::proportional(12.0),
-                    item_color,
-                );
-            }
-            if collapsed {
-                r.clone().on_hover_text(src.label());
-            }
-            if r.clicked() {
+                src.label(),
+                selected,
+                collapsed,
+            ) {
                 self.library_source = src;
-                // Wire source → existing filters / tabs.
                 match src {
                     LibrarySource::AllTracks => {
                         self.favourites_only = false;
@@ -1030,18 +1029,79 @@ impl DjApp {
                     LibrarySource::GridEdit => {
                         self.browser_tab = BrowserTab::GridEdit;
                     }
-                    LibrarySource::Genres
-                    | LibrarySource::Playlists
-                    | LibrarySource::Similar => {
-                        // Placeholders for now — keep the current
-                        // filter state and just highlight the rail
-                        // item. Real wiring lands when those features
-                        // do.
+                    LibrarySource::Playlists => {
+                        // Drill in. Children (folders + leaf
+                        // playlists) render in the next frame.
+                        self.source_rail_view = SourceRailView::PlaylistsAt { path: Vec::new() };
+                        self.browser_tab = BrowserTab::Tracks;
+                        self.favourites_only = false;
+                    }
+                    LibrarySource::Genres => {
+                        self.source_rail_view = SourceRailView::Genres;
+                        self.browser_tab = BrowserTab::Tracks;
+                        self.favourites_only = false;
+                    }
+                    LibrarySource::Similar => {
+                        // Placeholder — feature not built yet.
                         self.favourites_only = false;
                         self.browser_tab = BrowserTab::Tracks;
                     }
                 }
             }
+        }
+    }
+
+    /// Playlists drill-down at `path`. § 2 only paints the chrome
+    /// (Back button + header + empty-state message); § 4 wires the
+    /// real PlaylistStore tree.
+    fn render_rail_playlists(&mut self, ui: &mut egui::Ui, collapsed: bool, path: &[String]) {
+        let pal = palette::for_ui(ui);
+        // Back-out affordance. From any depth, click pops one level
+        // — empty path goes back to Root, non-empty pops a segment.
+        if source_rail_item(ui, "‹", "Back", false, collapsed) {
+            self.source_rail_view = match path.split_last() {
+                Some((_, init)) if !init.is_empty() || !path.is_empty() => {
+                    if path.len() <= 1 {
+                        SourceRailView::Root
+                    } else {
+                        SourceRailView::PlaylistsAt { path: init.to_vec() }
+                    }
+                }
+                _ => SourceRailView::Root,
+            };
+            return;
+        }
+        // Breadcrumb header. Empty path = "Playlists" alone; deeper
+        // shows the trailing folder name so the user knows where
+        // they are without a full crumb trail (rail is narrow).
+        if !collapsed {
+            let label = if path.is_empty() {
+                "Playlists".to_string()
+            } else {
+                format!("Playlists / {}", path.last().unwrap())
+            };
+            ui.colored_label(pal.muted, egui::RichText::new(label).small().strong());
+            ui.add_space(2.0);
+        }
+        // § 2: no data yet. Empty-state placeholder. § 4 replaces
+        // this with the real PlaylistStore tree.
+        if !collapsed {
+            ui.colored_label(pal.faint, egui::RichText::new("(no playlists yet)").small());
+        }
+    }
+
+    /// Genres drill-down. § 2 only paints chrome + empty state;
+    /// § 3 wires the derived genre list.
+    fn render_rail_genres(&mut self, ui: &mut egui::Ui, collapsed: bool) {
+        let pal = palette::for_ui(ui);
+        if source_rail_item(ui, "‹", "Back", false, collapsed) {
+            self.source_rail_view = SourceRailView::Root;
+            return;
+        }
+        if !collapsed {
+            ui.colored_label(pal.muted, egui::RichText::new("Genres").small().strong());
+            ui.add_space(2.0);
+            ui.colored_label(pal.faint, egui::RichText::new("(no genres yet)").small());
         }
     }
 
@@ -3286,6 +3346,63 @@ fn h_fader(
         }
     }
     resp
+}
+
+/// One row in the left source rail. Custom-painted instead of using
+/// `Button` so the icon column stays a fixed width across different
+/// glyphs (otherwise `≡` and `🕓` push the labels around). Returns
+/// `true` when clicked.
+///
+/// `collapsed = true` strips the label and shrinks the row to icon
+/// width only. Caller is responsible for managing selection state
+/// (highlighted background) — we just paint based on the `selected`
+/// flag.
+fn source_rail_item(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    selected: bool,
+    collapsed: bool,
+) -> bool {
+    let pal = palette::for_ui(ui);
+    let item_color = if selected { pal.accent_blue } else { pal.muted };
+    let h = 24.0;
+    let w = if collapsed { 40.0 } else { 110.0 };
+    let (rect, r) = ui.allocate_exact_size(
+        egui::Vec2::new(w, h),
+        egui::Sense::click(),
+    );
+    let bg = if selected {
+        with_opacity(pal.accent_blue, 0.18)
+    } else if r.hovered() {
+        pal.raised
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let painter = ui.painter_at(rect);
+    if bg != egui::Color32::TRANSPARENT {
+        painter.rect_filled(rect, 8.0, bg);
+    }
+    let icon_x = rect.left() + 14.0;
+    painter.text(
+        egui::Pos2::new(icon_x, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(15.0),
+        item_color,
+    );
+    if !collapsed {
+        painter.text(
+            egui::Pos2::new(icon_x + 16.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(12.0),
+            item_color,
+        );
+    } else {
+        r.clone().on_hover_text(label);
+    }
+    r.clicked()
 }
 
 /// Rounded-pill toggle. Outlined when off (chip bg + faint stroke),
