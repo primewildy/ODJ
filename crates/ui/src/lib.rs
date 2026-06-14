@@ -1090,8 +1090,11 @@ impl DjApp {
         }
     }
 
-    /// Genres drill-down. § 2 only paints chrome + empty state;
-    /// § 3 wires the derived genre list.
+    /// Genres drill-down. Derives a sorted unique list of non-empty
+    /// genre strings from `TrackMeta` on the fly (cheap — only ~10
+    /// distinct genres in a typical library; sort + dedup is
+    /// dominated by .to_lowercase()). Click sets `genre_filter`,
+    /// which the track-table cache already understands.
     fn render_rail_genres(&mut self, ui: &mut egui::Ui, collapsed: bool) {
         let pal = palette::for_ui(ui);
         if source_rail_item(ui, "‹", "Back", false, collapsed) {
@@ -1101,7 +1104,42 @@ impl DjApp {
         if !collapsed {
             ui.colored_label(pal.muted, egui::RichText::new("Genres").small().strong());
             ui.add_space(2.0);
-            ui.colored_label(pal.faint, egui::RichText::new("(no genres yet)").small());
+        }
+
+        // "All" pseudo-row at the top — lets the user clear the
+        // filter without leaving the drill-down. Selected when no
+        // genre is currently active.
+        let all_selected = self.genre_filter.is_none();
+        if source_rail_item(ui, "≡", "All", all_selected, collapsed) {
+            self.genre_filter = None;
+        }
+
+        // Distinct genres from the live track list. Cheap to recompute
+        // every frame at the library sizes we care about (~few hundred
+        // tracks → ~few dozen non-empty genres after dedup).
+        let mut genres: Vec<&str> = self
+            .tracks
+            .iter()
+            .map(|m| m.genre.trim())
+            .filter(|g| !g.is_empty())
+            .collect();
+        genres.sort_unstable_by_key(|g| g.to_lowercase());
+        genres.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+
+        if genres.is_empty() {
+            if !collapsed {
+                ui.colored_label(
+                    pal.faint,
+                    egui::RichText::new("(no genres in library yet)").small(),
+                );
+            }
+            return;
+        }
+        for g in genres {
+            let selected = self.genre_filter.as_deref().map(|s| s.eq_ignore_ascii_case(g)).unwrap_or(false);
+            if source_rail_item(ui, "🏷", g, selected, collapsed) {
+                self.genre_filter = Some(g.to_string());
+            }
         }
     }
 
