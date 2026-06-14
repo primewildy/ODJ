@@ -10,6 +10,13 @@ mod network_output;
 pub mod palette;
 mod persistence;
 pub mod settings;
+// Smart-playlist data model + evaluator. Spike — not wired into the
+// UI yet; see the module doc comment for the rollout plan. Allow
+// dead_code at module level so the public surface (which exists for
+// the future wizard) doesn't generate noise during the wire-in
+// transition.
+#[allow(dead_code)]
+mod smart_playlist;
 pub mod theme;
 mod upnp;
 
