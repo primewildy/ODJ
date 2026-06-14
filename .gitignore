@@ -34,9 +34,16 @@ fp-info-cache
 # Per-build controller config (hardware-specific; .example is committed)
 controls.toml
 
+# Local review/planning notes (working docs, not for the public repo)
+/CODE_REVIEW.md
+/FEATURES.md
+/AUTOMIX.md
+
 # Editor / OS
 .idea/
 .vscode/
+# VS Code Local History extension — per-file edit snapshots, not for git
+.history/
 *.swp
 .DS_Store
 

@@ -130,6 +130,8 @@ const STRIDE: usize = MODEL_CHUNK - 2 * OVERLAP; // 299,880
 
 fn run_htdemucs(input_path: &Path) -> Result<TrackStems> {
     let buf = decode::load_to_buffer(input_path)?;
+    let src_sr = buf.sample_rate;
+    let src_n_frames = buf.samples.len() / buf.channels.max(1) as usize;
     let audio = prepare_audio_for_model(&buf);
     let n_frames = audio.len() / 2;
 
@@ -268,14 +270,58 @@ fn run_htdemucs(input_path: &Path) -> Result<TrackStems> {
         t_extract.as_secs_f32() * 1000.0 / n_chunks as f32,
     );
 
+    // The model runs at 44.1 kHz but the audio engine indexes stems
+    // at the SOURCE sample rate (same `playhead` for buf and stems).
+    // If the source isn't 44.1 kHz we have to resample each stem back
+    // so playhead-frame indices line up. Linear interp is fine —
+    // stems are already band-limited by the model's synthesis.
+    if src_sr != MODEL_SR {
+        drums = resample_stereo_linear(&drums, MODEL_SR, src_sr, src_n_frames);
+        bass = resample_stereo_linear(&bass, MODEL_SR, src_sr, src_n_frames);
+        vocals = resample_stereo_linear(&vocals, MODEL_SR, src_sr, src_n_frames);
+        other = resample_stereo_linear(&other, MODEL_SR, src_sr, src_n_frames);
+    }
+
     Ok(TrackStems {
         drums,
         bass,
         vocals,
         other,
         channels: 2,
-        sample_rate: MODEL_SR,
+        sample_rate: src_sr,
     })
+}
+
+/// Linear-interp resample of interleaved stereo [L,R,L,R,...] from
+/// `from_sr` to `to_sr`, producing exactly `to_n_frames` output frames.
+/// Pinning the output length avoids drift relative to the source
+/// buffer the audio engine indexes alongside.
+fn resample_stereo_linear(
+    src: &[f32],
+    from_sr: u32,
+    to_sr: u32,
+    to_n_frames: usize,
+) -> Vec<f32> {
+    let src_frames = src.len() / 2;
+    let mut out = vec![0.0_f32; to_n_frames * 2];
+    if src_frames == 0 || to_n_frames == 0 {
+        return out;
+    }
+    let ratio = from_sr as f64 / to_sr as f64;
+    for i in 0..to_n_frames {
+        let src_pos = i as f64 * ratio;
+        let lo = src_pos.floor() as usize;
+        let hi = (lo + 1).min(src_frames - 1);
+        let t = (src_pos - lo as f64) as f32;
+        if lo >= src_frames {
+            break;
+        }
+        let l = src[lo * 2] * (1.0 - t) + src[hi * 2] * t;
+        let r = src[lo * 2 + 1] * (1.0 - t) + src[hi * 2 + 1] * t;
+        out[i * 2] = l;
+        out[i * 2 + 1] = r;
+    }
+    out
 }
 
 /// Linear-interp resample to 44.1 kHz stereo and de-interleave to

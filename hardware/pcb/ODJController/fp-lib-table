@@ -1,0 +1,4 @@
+(fp_lib_table
+	(version 7)
+	(lib (name "odj") (type "KiCad") (uri "/home/ben/Documents/DJ/hardware/pcb/odj.pretty") (options "") (descr ""))
+)

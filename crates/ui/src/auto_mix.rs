@@ -127,15 +127,6 @@ impl AutoMixShared {
         }
     }
 
-    pub fn label(&self) -> &'static str {
-        match &self.state {
-            AutoMixState::Off => "🔁 Auto-mix",
-            AutoMixState::Armed(s) if s.pre_load_pending.is_some() => "🔁 Auto-mix (loading)",
-            AutoMixState::Armed(_) => "🔁 Auto-mix (armed)",
-            AutoMixState::Active(_) => "🔁 Auto-mix (mixing)",
-        }
-    }
-
     pub fn is_active(&self) -> bool { matches!(self.state, AutoMixState::Active(_)) }
 }
 
@@ -431,9 +422,7 @@ impl AutoMixController {
     fn maybe_start_idle(&self) {
         {
             let s = self.shared.lock().unwrap();
-            if let AutoMixState::Armed(ref a) = s.state {
-                if a.recovery_attempted { return; }
-            } else {
+            if !matches!(s.state, AutoMixState::Armed(_)) {
                 return;
             }
         }
@@ -461,11 +450,25 @@ impl AutoMixController {
             None
         };
         let Some((d, path)) = candidate else {
-            let mut s = self.shared.lock().unwrap();
-            if let AutoMixState::Armed(ref mut a) = s.state {
-                a.recovery_attempted = true;
+            // No fresh deck. Don't latch — recovery_attempted is the
+            // post-START guard, not "did we look", so leaving it false
+            // means we'll re-evaluate every tick (20 Hz) and pounce
+            // the moment a pre-load lands. Kick a pre-load on any
+            // truly empty deck so we're not stuck waiting forever on
+            // a deck the user hasn't loaded anything onto.
+            for (m, dk) in [(&meta_a, DeckId::A), (&meta_b, DeckId::B)] {
+                if m.loaded_path.is_none() {
+                    let pending_match = {
+                        let s = self.shared.lock().unwrap();
+                        matches!(&s.state, AutoMixState::Armed(a)
+                            if a.pre_load_pending.is_some())
+                    };
+                    if !pending_match {
+                        self.force_preload_on(dk);
+                    }
+                    break;
+                }
             }
-            eprintln!("auto-mix: no fresh deck to start — waiting for pre-load to land");
             return;
         };
         eprintln!(
@@ -528,13 +531,27 @@ impl AutoMixController {
                         a.sync_sent = true;
                     }
                 }
+                // Preferred: align to every 4th detected downbeat
+                // (16-bar red line). Fall back to every 16th beat in
+                // the raw beat grid when downbeats are empty — better
+                // a slightly-off bar boundary than disarming entirely
+                // on a track the model didn't tag.
                 let next_mix = out_meta.downbeats.iter().enumerate()
                     .filter(|(j, _)| j % 4 == 0)
                     .filter_map(|(_, &i)| out_meta.beat_grid.get(i as usize).copied())
-                    .find(|&t| t > out_t + 1.0);
+                    .find(|&t| t > out_t + 1.0)
+                    .or_else(|| {
+                        out_meta.beat_grid.iter().enumerate()
+                            .filter(|(j, _)| j % 16 == 0)
+                            .map(|(_, &t)| t)
+                            .find(|&t| t > out_t + 1.0)
+                    });
                 let Some(mix_t) = next_mix else {
-                    eprintln!("auto-mix: no upcoming red line on out deck — bailing");
-                    self.disarm_to_off();
+                    // Beat grid itself is empty / track is fully past
+                    // playhead. Re-arm rather than turning auto-mix
+                    // off — the user wanted it on; respect that.
+                    eprintln!("auto-mix: no upcoming beat on out deck — re-arming");
+                    self.rearm();
                     return;
                 };
                 // Blend must end at least END_MARGIN beats before track end.
@@ -542,10 +559,10 @@ impl AutoMixController {
                 let end_margin_secs = END_MARGIN_BEATS * 60.0 / bpm as f64;
                 if blend_end > out_total_secs - end_margin_secs {
                     eprintln!(
-                        "auto-mix: not enough track left for 32-beat blend with {:.0}-beat end margin — bailing",
-                        END_MARGIN_BEATS
+                        "auto-mix: not enough track left for 32-beat blend ({:.1}-beat margin) — re-arming for next",
+                        END_MARGIN_BEATS,
                     );
-                    self.disarm_to_off();
+                    self.rearm();
                     return;
                 }
                 eprintln!(
@@ -598,25 +615,18 @@ impl AutoMixController {
         }
     }
 
-    fn disarm_to_off(&self) {
-        let prev = {
-            let mut s = self.shared.lock().unwrap();
-            std::mem::replace(&mut s.state, AutoMixState::Off)
-        };
-        match prev {
-            AutoMixState::Off => {}
-            AutoMixState::Armed(_) => {
-                eprintln!("auto-mix: disarmed (controller-initiated)");
-            }
-            AutoMixState::Active(active) => {
-                eprintln!("auto-mix: cancelled (controller-initiated mid-blend)");
-                let _ = self.sender.send(DeckCommand::SetGain { deck: active.in_deck, gain: 0.0 });
-                let _ = self.sender.send(DeckCommand::SetStemDrums { deck: active.in_deck, gain: 1.0 });
-                let _ = self.sender.send(DeckCommand::SetGain { deck: active.out_deck, gain: 1.0 });
-                let _ = self.sender.send(DeckCommand::SetStemDrums { deck: active.out_deck, gain: 1.0 });
-            }
+    /// Drop the current Active attempt and return to Armed. Used when
+    /// a particular blend can't proceed (e.g. red-line search failed,
+    /// blend wouldn't fit before track end) but the user still wants
+    /// auto-mix engaged. The controller will reconsider on the next
+    /// tick — useful e.g. when a new track is mid-load.
+    fn rearm(&self) {
+        let mut s = self.shared.lock().unwrap();
+        if matches!(s.state, AutoMixState::Active(_)) {
+            s.state = AutoMixState::Armed(ArmedState::default());
         }
     }
+
 }
 
 enum StateKind { Armed, Active }
@@ -652,6 +662,7 @@ pub fn spawn_load_worker(
             Ok(b) => b,
             Err(e) => {
                 eprintln!("decode {} failed: {e}", path.display());
+                let _ = tx.send(LoadEvent::Failed { deck, path: path.clone() });
                 return;
             }
         };
@@ -754,6 +765,7 @@ pub fn spawn_load_worker(
                     beats: r.beat_grid.clone(),
                     downbeats: r.downbeats.clone(),
                     version: r.analysis_version,
+                    duration_secs: Some(duration_secs),
                 };
                 cache_slow.insert(path.clone(), entry);
                 let refined = Arc::new(TrackAnalysis {

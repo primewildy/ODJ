@@ -159,6 +159,15 @@ impl PhaseVocoder {
         let h = self.hop_a_accum.floor() as i64;
         let h = h.clamp(1, MAX_HOP_A as i64) as usize;
         self.hop_a_accum -= h as f64;
+        // Defence in depth: callers are expected to clamp speed so the
+        // residual stays in [0, 1), but if a stale speed slips past
+        // (or rounding piles up over a long run) clamp the residual
+        // here so it can't compound across frames.
+        if self.hop_a_accum > 1.0 {
+            self.hop_a_accum = 1.0;
+        } else if self.hop_a_accum < 0.0 {
+            self.hop_a_accum = 0.0;
+        }
         h
     }
 
@@ -282,5 +291,89 @@ impl PhaseVocoder {
         }
         self.ready -= take;
         take
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Hop accumulator / clamp tests for the PV. These guard the
+    //! H3 fix (clamp speed + clamp residual) — without them a
+    //! stale speed > 2× would compound the accumulator's residual
+    //! across frames and drift output relative to playhead.
+    use super::*;
+
+    #[test]
+    fn next_hop_a_clamps_at_max() {
+        let mut pv = PhaseVocoder::new(2);
+        // 4× speed would request HOP_A = 1024, more than MAX_HOP_A.
+        // Should clamp to MAX_HOP_A.
+        let h = pv.next_hop_a(4.0);
+        assert_eq!(h, MAX_HOP_A);
+    }
+
+    #[test]
+    fn next_hop_a_residual_stays_bounded() {
+        let mut pv = PhaseVocoder::new(2);
+        // Speed of 2.0 exactly = MAX_HOP_A per call; residual should
+        // be ~0 each call. Run 1000 times and verify accum doesn't
+        // grow unboundedly.
+        for _ in 0..1000 {
+            let _ = pv.next_hop_a(2.0);
+            assert!(
+                pv.hop_a_accum.abs() <= 1.0,
+                "accum drifted to {}",
+                pv.hop_a_accum
+            );
+        }
+    }
+
+    #[test]
+    fn next_hop_a_residual_bounded_even_with_overspeed() {
+        // Even if a stale speed > 2× slips past the caller's clamp,
+        // the in-pvoc clamp keeps the residual ≤ 1. Otherwise the
+        // tempo would silently lag.
+        let mut pv = PhaseVocoder::new(2);
+        for _ in 0..1000 {
+            let _ = pv.next_hop_a(10.0); // intentionally bogus
+            assert!(pv.hop_a_accum <= 1.0 && pv.hop_a_accum >= 0.0,
+                "accum out of range: {}", pv.hop_a_accum);
+        }
+    }
+
+    #[test]
+    fn next_hop_a_fractional_speed_averages_correctly() {
+        // Long-term average HOP_A at 1.0× should be HOP_S exactly.
+        let mut pv = PhaseVocoder::new(2);
+        let mut sum = 0usize;
+        const N: usize = 1000;
+        for _ in 0..N {
+            sum += pv.next_hop_a(1.0);
+        }
+        let avg = sum as f64 / N as f64;
+        assert!(
+            (avg - HOP_S as f64).abs() < 0.01,
+            "avg HOP_A {} drifted from HOP_S {}",
+            avg,
+            HOP_S
+        );
+    }
+
+    #[test]
+    fn next_hop_a_floor_speed_yields_at_least_one() {
+        let mut pv = PhaseVocoder::new(2);
+        // Very low speed could compute hop_a = 0; clamp must lift to 1.
+        let h = pv.next_hop_a(0.001);
+        assert!(h >= 1, "hop_a must never be 0 (was {})", h);
+    }
+
+    #[test]
+    fn reset_clears_accumulator() {
+        let mut pv = PhaseVocoder::new(2);
+        for _ in 0..50 {
+            let _ = pv.next_hop_a(1.3);
+        }
+        pv.reset();
+        assert_eq!(pv.hop_a_accum, 0.0);
+        assert_eq!(pv.ready, 0);
     }
 }

@@ -28,45 +28,85 @@
 #include "pico/stdlib.h"
 #include "tusb.h"
 
-// ===== Pin assignments (see ../SCHEMATIC.md) =====
+// ===== Pin assignments (see hardware/pcb/odj_controller.py) =====
+//
+// BOTH decks now wired. Deck A is the LEFT half, Deck B is the RIGHT
+// half (matching the case_half.scad asymmetry: LEFT = USB hole, RIGHT
+// = heat-set inserts at the seam).
 
-#define PIN_ENC_A      14
-#define PIN_ENC_B      15
+// Encoders — 4 pins, 2 per deck.
+#define PIN_ENC_A_A    14  // Deck A encoder A phase
+#define PIN_ENC_A_B    15  // Deck A encoder B phase
+#define PIN_ENC_B_A    16  // Deck B encoder A phase
+#define PIN_ENC_B_B    17  // Deck B encoder B phase
 
-#define PIN_BTN_1      10  // play / pause toggle
-#define PIN_BTN_2      11  // CUE (Pioneer state machine)
-#define PIN_BTN_3      12  // nudge − (while held)
-#define PIN_BTN_4      13  // nudge + (while held)
+// Buttons — 8 total, 4 per deck (PLAY, CUE, 🎧-CUE/HPCUE, SYNC).
+#define PIN_BTN_A_PLAY   10  // note 40
+#define PIN_BTN_A_CUE    11  // note 41
+#define PIN_BTN_A_HPCUE  12  // note 44
+#define PIN_BTN_A_SYNC    2  // note 46
+#define PIN_BTN_B_PLAY   13  // note 36
+#define PIN_BTN_B_CUE    19  // note 37
+#define PIN_BTN_B_HPCUE  20  // note 45
+#define PIN_BTN_B_SYNC    3  // note 47
 
-#define PIN_MUX_S0      6
-#define PIN_MUX_S1      7
-#define PIN_MUX_S2      8
-#define PIN_MUX_OUT    26  // ADC0
-#define ADC_INPUT       0  // ADC channel for GP26
+// Mux — shared select lines, separate output pins on different ADC channels.
+#define PIN_MUX_S0        6
+#define PIN_MUX_S1        7
+#define PIN_MUX_S2        8
+#define PIN_MUX_A_OUT    26  // GP26 / ADC0 — Deck A mux
+#define PIN_MUX_B_OUT    27  // GP27 / ADC1 — Deck B mux
+#define ADC_INPUT_A       0
+#define ADC_INPUT_B       1
 
-// LED feedback. Host sends note_on 40 → LED on, note_off 40 → LED off,
-// mirroring Deck A's playing state.
-#define PIN_LED_PLAY_A 18
+// LEDs — host emits note_on/off and we mirror onto the relevant pin.
+//   note 40 → Deck A PLAY      (lit while Deck A is playing)
+//   note 36 → Deck B PLAY
+//   note 44 → Deck A 🎧-CUE     (lit while Deck A is on the cue bus)
+//   note 45 → Deck B 🎧-CUE
+#define PIN_LED_A_PLAY    18
+#define PIN_LED_A_HPCUE   22
+#define PIN_LED_B_PLAY    21
+#define PIN_LED_B_HPCUE    9
 
 // ===== MIDI mapping =====
 
 #define MIDI_CHANNEL    0   // MIDI channel 1
-#define ENCODER_CC     16
+// Jog encoders use Pioneer relative-CC (value = 64 + signed delta).
+#define ENCODER_CC_A   16   // Deck A jog
+#define ENCODER_CC_B   17   // Deck B jog (host needs a CC 17 handler)
 
+// Mux channel → CC mapping mirrors src/midi.rs.
+//   Deck A: pitch=1, gain=2, high=3, low=4, mid=9
+//   Deck B: pitch=5, gain=6, high=7, low=8, mid=10
+// On THIS controller the physical HIGH and MID pots ended up on Y1/Y2
+// (swapped vs the "natural" channel order); the CC assignments below
+// account for that so no rewiring is needed.
 #define MUX_CHANNELS    5
-static const uint8_t MUX_CC[MUX_CHANNELS] = {
-    4,   // Y0 — EQ low
-    9,   // Y1 — EQ mid (no host engine handler yet)
-    3,   // Y2 — EQ high
-    2,   // Y3 — volume
-    1,   // Y4 — pitch
+static const uint8_t MUX_CC_A[MUX_CHANNELS] = {
+    4,   // Y0 — Deck A EQ low
+    9,   // Y1 — physical MID pot wired here  → Deck A EQ mid
+    3,   // Y2 — physical HIGH pot wired here → Deck A EQ high
+    2,   // Y3 — Deck A volume
+    1,   // Y4 — Deck A pitch
+};
+static const uint8_t MUX_CC_B[MUX_CHANNELS] = {
+    8,   // Y0 — Deck B EQ low
+    7,   // Y1 — Deck B EQ high
+    10,  // Y2 — Deck B EQ mid
+    6,   // Y3 — Deck B volume
+    5,   // Y4 — Deck B pitch
 };
 
-#define NUM_BUTTONS 4
+#define NUM_BUTTONS 8
 static const uint8_t BUTTON_PIN[NUM_BUTTONS] = {
-    PIN_BTN_1, PIN_BTN_2, PIN_BTN_3, PIN_BTN_4,
+    PIN_BTN_A_PLAY, PIN_BTN_A_CUE, PIN_BTN_A_HPCUE, PIN_BTN_A_SYNC,
+    PIN_BTN_B_PLAY, PIN_BTN_B_CUE, PIN_BTN_B_HPCUE, PIN_BTN_B_SYNC,
 };
-static const uint8_t BUTTON_NOTE[NUM_BUTTONS] = { 40, 41, 42, 43 };
+static const uint8_t BUTTON_NOTE[NUM_BUTTONS] = {
+    40, 41, 44, 46,   // Deck A: PLAY, CUE, HPCUE, SYNC
+    36, 37, 45, 47,   // Deck B: PLAY, CUE, HPCUE, SYNC
+};
 
 #define DEBOUNCE_MS         5
 #define SCAN_INTERVAL_MS    5
@@ -80,9 +120,11 @@ static const uint8_t BUTTON_NOTE[NUM_BUTTONS] = { 40, 41, 42, 43 };
 
 // ===== State =====
 
-// Quadrature accumulator. Updated on every poll; drained at MIDI send time.
-static volatile int32_t encoder_accum = 0;
-static uint8_t encoder_last_state = 0;
+// Quadrature accumulator per deck. Updated every poll; drained at MIDI send.
+static volatile int32_t encoder_accum_a = 0;
+static volatile int32_t encoder_accum_b = 0;
+static uint8_t encoder_last_state_a = 0;
+static uint8_t encoder_last_state_b = 0;
 
 // 4-state Gray-code transition table.
 // Index: (prev_AB << 2) | curr_AB. Value: +1 / 0 / -1.
@@ -96,11 +138,14 @@ static const int8_t QDEC_TABLE[16] = {
     0, -1, +1,  0,
 };
 
-static bool button_state[NUM_BUTTONS] = { false, false, false, false };
+static bool button_state[NUM_BUTTONS] = {
+    false, false, false, false, false, false, false, false,
+};
 static absolute_time_t button_debounce_until[NUM_BUTTONS];
 
-// Last reported 7-bit value per mux channel. 0xFF forces an initial send.
-static uint8_t mux_last_value[MUX_CHANNELS] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+// Last reported 7-bit value per mux channel, per deck. 0xFF forces initial send.
+static uint8_t mux_last_a[MUX_CHANNELS] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+static uint8_t mux_last_b[MUX_CHANNELS] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
 // SysEx accumulator — used to receive control messages from the host (e.g.,
 // "reboot to BOOTSEL"). USB MIDI packs SysEx into 4-byte packets with CIN
@@ -137,28 +182,44 @@ static inline void midi_send_cc(uint8_t channel, uint8_t cc, uint8_t value) {
     tud_midi_packet_write(packet);
 }
 
-// ===== Encoder =====
+// ===== Encoders =====
 
 static inline void encoder_poll(void) {
-    uint8_t a = (uint8_t) gpio_get(PIN_ENC_A);
-    uint8_t b = (uint8_t) gpio_get(PIN_ENC_B);
-    uint8_t state = (uint8_t) ((a << 1) | b);
-    encoder_accum += QDEC_TABLE[(encoder_last_state << 2) | state];
-    encoder_last_state = state;
+    // Deck A
+    {
+        uint8_t a = (uint8_t) gpio_get(PIN_ENC_A_A);
+        uint8_t b = (uint8_t) gpio_get(PIN_ENC_A_B);
+        uint8_t state = (uint8_t) ((a << 1) | b);
+        encoder_accum_a += QDEC_TABLE[(encoder_last_state_a << 2) | state];
+        encoder_last_state_a = state;
+    }
+    // Deck B
+    {
+        uint8_t a = (uint8_t) gpio_get(PIN_ENC_B_A);
+        uint8_t b = (uint8_t) gpio_get(PIN_ENC_B_B);
+        uint8_t state = (uint8_t) ((a << 1) | b);
+        encoder_accum_b += QDEC_TABLE[(encoder_last_state_b << 2) | state];
+        encoder_last_state_b = state;
+    }
+}
+
+static inline void send_one_encoder(volatile int32_t* accum, uint8_t cc) {
+    int32_t delta = *accum;
+    if (delta == 0) return;
+    // Clamp first so the residual (= raw - sent) carries into the
+    // next tick. Otherwise a very fast spin (≥64 ticks per 5 ms scan)
+    // would clamp the value sent but still subtract the *full* raw
+    // delta, silently dropping the overflow.
+    if (delta > 63)  delta = 63;
+    if (delta < -63) delta = -63;
+    *accum -= delta;
+    // Pioneer-style relative-CC: value = 64 + signed delta.
+    midi_send_cc(MIDI_CHANNEL, cc, (uint8_t)(64 + delta));
 }
 
 static void send_encoder_delta(void) {
-    int32_t delta = encoder_accum;
-    if (delta == 0) {
-        return;
-    }
-    encoder_accum -= delta;  // drain
-
-    // Pioneer-style relative-CC encoding: value = 64 + signed delta.
-    // Clamp to 7-bit signed range so we always have a valid CC value.
-    if (delta > 63)  delta = 63;
-    if (delta < -63) delta = -63;
-    midi_send_cc(MIDI_CHANNEL, ENCODER_CC, (uint8_t) (64 + delta));
+    send_one_encoder(&encoder_accum_a, ENCODER_CC_A);
+    send_one_encoder(&encoder_accum_b, ENCODER_CC_B);
 }
 
 // ===== Buttons =====
@@ -192,37 +253,28 @@ static inline void mux_select(uint8_t channel) {
 // for normal use.
 #define MUX_DEBUG 0
 
+static inline void scan_mux_one(uint8_t adc_input, uint8_t ch, uint8_t cc,
+                                uint8_t* last) {
+    adc_select_input(adc_input);
+    uint16_t raw = adc_read();
+    uint8_t value = (uint8_t)(raw >> 5);  // 12-bit → 7-bit
+    if (*last != 0xFF) {
+        int diff = (int)value - (int)*last;
+        if (diff > -MUX_DEADBAND && diff < MUX_DEADBAND) return;
+    }
+    *last = value;
+    midi_send_cc(MIDI_CHANNEL, cc, value);
+}
+
 static void scan_mux(void) {
+    // One select op drives BOTH muxes (they share S0/S1/S2). Then read
+    // each ADC in turn; the second adc_select_input adds ~2 µs which is
+    // longer than the mux settle, so no extra delay needed.
     for (uint8_t ch = 0; ch < MUX_CHANNELS; ch++) {
         mux_select(ch);
         sleep_us(MUX_SETTLE_US);
-        uint16_t raw = adc_read();          // 0..4095 (12-bit)
-        uint8_t value = (uint8_t) (raw >> 5); // 0..127 (7-bit)
-
-#if MUX_DEBUG
-        // Stream the full mux→ADC path (deadband ignored) at ~20 Hz per
-        // channel so we can watch the pots/faders move.
-        static uint32_t dbg = 0;
-        if (ch == 0) {
-            dbg++;
-        }
-        if (dbg % 10 == 0) {
-            midi_send_cc(MIDI_CHANNEL, MUX_CC[ch], value);
-        }
-        continue;
-#else
-        // Force the first reading through (last_value starts at 0xFF) so
-        // the host gets an initial position. After that, gate small
-        // changes via the deadband.
-        if (mux_last_value[ch] != 0xFF) {
-            int diff = (int) value - (int) mux_last_value[ch];
-            if (diff > -MUX_DEADBAND && diff < MUX_DEADBAND) {
-                continue;
-            }
-        }
-        mux_last_value[ch] = value;
-        midi_send_cc(MIDI_CHANNEL, MUX_CC[ch], value);
-#endif
+        scan_mux_one(ADC_INPUT_A, ch, MUX_CC_A[ch], &mux_last_a[ch]);
+        scan_mux_one(ADC_INPUT_B, ch, MUX_CC_B[ch], &mux_last_b[ch]);
     }
 }
 
@@ -239,8 +291,12 @@ static void handle_sysex(const uint8_t* buf, uint8_t len) {
 
 static void handle_note(uint8_t note, bool on) {
     // Mirror host's deck-state notes back onto button LEDs.
-    if (note == 40) {
-        gpio_put(PIN_LED_PLAY_A, on);
+    switch (note) {
+        case 40: gpio_put(PIN_LED_A_PLAY,  on); break;  // Deck A playing
+        case 44: gpio_put(PIN_LED_A_HPCUE, on); break;  // Deck A 🎧-cue active
+        case 36: gpio_put(PIN_LED_B_PLAY,  on); break;  // Deck B playing
+        case 45: gpio_put(PIN_LED_B_HPCUE, on); break;  // Deck B 🎧-cue active
+        default: break;
     }
 }
 
@@ -289,14 +345,19 @@ static void drain_midi_input(void) {
 
 // ===== Setup =====
 
-static void init_gpio(void) {
-    gpio_init(PIN_ENC_A);
-    gpio_set_dir(PIN_ENC_A, GPIO_IN);
-    gpio_pull_up(PIN_ENC_A);
+static const uint8_t ENC_PINS[4] = {
+    PIN_ENC_A_A, PIN_ENC_A_B, PIN_ENC_B_A, PIN_ENC_B_B,
+};
+static const uint8_t LED_PINS[4] = {
+    PIN_LED_A_PLAY, PIN_LED_A_HPCUE, PIN_LED_B_PLAY, PIN_LED_B_HPCUE,
+};
 
-    gpio_init(PIN_ENC_B);
-    gpio_set_dir(PIN_ENC_B, GPIO_IN);
-    gpio_pull_up(PIN_ENC_B);
+static void init_gpio(void) {
+    for (int i = 0; i < 4; i++) {
+        gpio_init(ENC_PINS[i]);
+        gpio_set_dir(ENC_PINS[i], GPIO_IN);
+        gpio_pull_up(ENC_PINS[i]);
+    }
 
     absolute_time_t boot_zero = make_timeout_time_ms(0);
     for (int i = 0; i < NUM_BUTTONS; i++) {
@@ -310,29 +371,32 @@ static void init_gpio(void) {
     gpio_init(PIN_MUX_S1); gpio_set_dir(PIN_MUX_S1, GPIO_OUT); gpio_put(PIN_MUX_S1, 0);
     gpio_init(PIN_MUX_S2); gpio_set_dir(PIN_MUX_S2, GPIO_OUT); gpio_put(PIN_MUX_S2, 0);
 
-    gpio_init(PIN_LED_PLAY_A);
-    gpio_set_dir(PIN_LED_PLAY_A, GPIO_OUT);
-    gpio_put(PIN_LED_PLAY_A, 0);
+    for (int i = 0; i < 4; i++) {
+        gpio_init(LED_PINS[i]);
+        gpio_set_dir(LED_PINS[i], GPIO_OUT);
+        gpio_put(LED_PINS[i], 0);
+    }
 
-    // Seed the encoder's "previous" state from current pins to avoid a
-    // spurious count on boot.
-    uint8_t a = (uint8_t) gpio_get(PIN_ENC_A);
-    uint8_t b = (uint8_t) gpio_get(PIN_ENC_B);
-    encoder_last_state = (uint8_t) ((a << 1) | b);
+    // Seed each encoder's "previous" state from current pins so we don't
+    // emit a spurious count on boot.
+    {
+        uint8_t a = (uint8_t) gpio_get(PIN_ENC_A_A);
+        uint8_t b = (uint8_t) gpio_get(PIN_ENC_A_B);
+        encoder_last_state_a = (uint8_t)((a << 1) | b);
+    }
+    {
+        uint8_t a = (uint8_t) gpio_get(PIN_ENC_B_A);
+        uint8_t b = (uint8_t) gpio_get(PIN_ENC_B_B);
+        encoder_last_state_b = (uint8_t)((a << 1) | b);
+    }
 }
 
 static void init_adc(void) {
     adc_init();
-#if MUX_DEBUG
-    // Enable the on-chip temperature sensor (ADC channel 4) so the debug
-    // build can prove the ADC core is converting at all, and init the
-    // other analog-capable GPIOs so we can probe them directly.
-    adc_set_temp_sensor_enabled(true);
-    adc_gpio_init(27);
-    adc_gpio_init(28);
-#endif
-    adc_gpio_init(PIN_MUX_OUT);
-    adc_select_input(ADC_INPUT);
+    adc_gpio_init(PIN_MUX_A_OUT);
+    adc_gpio_init(PIN_MUX_B_OUT);
+    // scan_mux() re-selects per channel; this is just an initial pick.
+    adc_select_input(ADC_INPUT_A);
 }
 
 int main(void) {

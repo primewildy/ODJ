@@ -13,3 +13,5 @@ egui_extras = { workspace = true }
 anyhow = { workspace = true }
 libc = { workspace = true }
 stems = { path = "../stems" }
+serde = { workspace = true }
+toml = { workspace = true }

@@ -110,10 +110,13 @@ pub fn load_to_buffer(path: impl AsRef<Path>) -> Result<Arc<TrackBuffer>> {
     let sample_rate = codec_params
         .sample_rate
         .ok_or_else(|| anyhow!("unknown sample rate"))?;
-    let channels = codec_params
-        .channels
-        .ok_or_else(|| anyhow!("unknown channel layout"))?
-        .count() as u16;
+    // Channel count is *optional* in symphonia's codec params for some
+    // containers (notably m4a/AAC, where the channel-config descriptor
+    // is sometimes missing or uses a layout symphonia doesn't map).
+    // The decoded audio buffer's spec carries the real layout once
+    // the first packet is through, so defer to that when the codec
+    // params don't tell us up front.
+    let mut channels: Option<u16> = codec_params.channels.map(|c| c.count() as u16);
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&codec_params, &DecoderOptions::default())
@@ -140,6 +143,9 @@ pub fn load_to_buffer(path: impl AsRef<Path>) -> Result<Arc<TrackBuffer>> {
             Ok(audio_buf) => {
                 if sample_buf.is_none() {
                     let spec = *audio_buf.spec();
+                    if channels.is_none() {
+                        channels = Some(spec.channels.count() as u16);
+                    }
                     sample_buf = Some(SampleBuffer::<f32>::new(audio_buf.capacity() as u64, spec));
                 }
                 if let Some(sb) = sample_buf.as_mut() {
@@ -156,6 +162,8 @@ pub fn load_to_buffer(path: impl AsRef<Path>) -> Result<Arc<TrackBuffer>> {
         }
     }
 
+    let channels = channels
+        .ok_or_else(|| anyhow!("unknown channel layout (no decoded packets to infer from)"))?;
     Ok(Arc::new(TrackBuffer {
         samples,
         channels,

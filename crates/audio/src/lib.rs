@@ -15,8 +15,10 @@
 //! poll current state without coordination.
 
 mod eq;
+mod fx;
 mod pvoc;
 use eq::Biquad;
+use fx::FxChain;
 use pvoc::PhaseVocoder;
 
 use std::sync::Arc;
@@ -85,6 +87,10 @@ pub struct DeckTelemetry {
     /// loop button enabled/disabled state.
     pub loop_in: Arc<AtomicU64>,
     pub loop_out: Arc<AtomicU64>,
+    /// 8 hot-cue slot frame positions, mirrored from `DeckState`.
+    /// `u64::MAX` = empty. The UI renders set slots in the
+    /// transport row and draws position markers on the waveforms.
+    pub hot_cues: [Arc<AtomicU64>; 8],
 }
 
 impl DeckTelemetry {
@@ -107,6 +113,7 @@ impl DeckTelemetry {
             cue_on: Arc::new(AtomicBool::new(false)),
             loop_in: Arc::new(AtomicU64::new(u64::MAX)),
             loop_out: Arc::new(AtomicU64::new(u64::MAX)),
+            hot_cues: std::array::from_fn(|_| Arc::new(AtomicU64::new(u64::MAX))),
         }
     }
 
@@ -141,6 +148,15 @@ impl DeckTelemetry {
     pub fn loop_in_frame(&self) -> Option<u64> {
         let v = self.loop_in.load(Ordering::Relaxed);
         if v == u64::MAX { None } else { Some(v) }
+    }
+
+    /// Snapshot of all 8 hot-cue slot frame positions. `None` means
+    /// the slot is empty; `Some(frame)` is the stored position.
+    pub fn hot_cue_frames(&self) -> [Option<u64>; 8] {
+        std::array::from_fn(|i| {
+            let v = self.hot_cues[i].load(Ordering::Relaxed);
+            if v == u64::MAX { None } else { Some(v) }
+        })
     }
     pub fn current_eq_low_db(&self) -> f32 {
         f32::from_bits(self.eq_low_db.load(Ordering::Relaxed))
@@ -297,6 +313,27 @@ impl Engine {
         let (prod, cons) = control::channel(RING_CAPACITY);
         let deck_a_tel = DeckTelemetry::new();
         let deck_b_tel = DeckTelemetry::new();
+        // Retire ring: audio thread pushes old Arcs here, drain thread
+        // pops + drops them. Capacity is conservative — even at one
+        // LoadTrack/sec we'd need 64 seconds of drain-thread starvation
+        // to overflow, and overflow just means we drop in-callback (the
+        // previous behaviour) rather than blocking.
+        let (retire_producer, mut retire_consumer) =
+            rtrb::RingBuffer::<RetiredArc>::new(64);
+        std::thread::Builder::new()
+            .name("dj-retire".into())
+            .spawn(move || loop {
+                // We can't tell when the audio engine is gone — the
+                // sender is owned by the audio thread which lives until
+                // the cpal stream is dropped. When it's dropped, the
+                // pop here starts returning Err forever; sleep + retry
+                // is fine and the thread exits when the process does.
+                while let Ok(arc) = retire_consumer.pop() {
+                    drop(arc);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            })
+            .context("spawning Arc-retire drain thread")?;
         let stream = build_stream(
             &device,
             &config,
@@ -306,6 +343,7 @@ impl Engine {
             deck_a_tel.clone(),
             deck_b_tel.clone(),
             cue_producer,
+            retire_producer,
         )
         .context("building master output stream")?;
         stream.play().context("starting master stream")?;
@@ -369,6 +407,21 @@ impl Engine {
     pub fn playhead(&self, deck: DeckId) -> u64 {
         self.telemetry(deck).playhead_frames()
     }
+}
+
+/// Enumerate every cpal output device the default host can see. Used
+/// by the settings UI to populate the audio/cue device dropdowns —
+/// returns just the names, dedup'd by exact string (cpal can list
+/// the same node twice on some PipeWire setups).
+pub fn list_output_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    let mut names: Vec<String> = match host.output_devices() {
+        Ok(it) => it.filter_map(|d| d.name().ok()).collect(),
+        Err(_) => Vec::new(),
+    };
+    names.sort();
+    names.dedup();
+    names
 }
 
 fn pick_device(host: &cpal::Host, requested: Option<&str>) -> Result<cpal::Device> {
@@ -452,6 +505,14 @@ struct DeckState {
     cue_on: bool,
     /// True iff playback was started by a CuePress while paused.
     in_preview: bool,
+    /// 8 hot-cue slots — frame positions, `None` when unset.
+    /// Loaded by the UI from `.track-meta` after each `LoadTrack`.
+    hot_cues: [Option<u64>; 8],
+    /// Which hot-cue slot is currently in preview (held while
+    /// paused). `Some(slot)` while a `HotCueSetOrJump` paused-branch
+    /// is active; `HotCueRelease` checks it matches before
+    /// returning to the slot. Mutually exclusive with `in_preview`.
+    hot_cue_preview: Option<u8>,
     gain_linear: f32,
     /// 1.0 = native rate. Range commonly 0.92..1.08 (±8%).
     speed_ratio: f32,
@@ -468,6 +529,9 @@ struct DeckState {
     beat_align: bool,
     /// Per-deck phase vocoder. Always allocated; reset on pitch_lock toggle.
     pvoc: PhaseVocoder,
+    /// Per-deck post-EQ FX chain (Echo today, more effects later).
+    /// Always allocated; toggling ON/OFF just flips a flag.
+    fx: FxChain,
     /// Stereo low-shelf, mid-peaking, and high-shelf EQ biquads (in series).
     eq_low: Biquad,
     eq_mid: Biquad,
@@ -499,6 +563,19 @@ struct DeckState {
     loop_in: Option<u64>,
     loop_out: Option<u64>,
     loop_exit_pending: bool,
+    /// Deferred hot-cue jump. When Quantize is on and the deck is
+    /// playing, a hot-cue jump waits for the playhead to cross the
+    /// next beat (`fire_at_frame`) and then teleports to
+    /// `target_frame`. Both are zero-filled (`None` outside a pending
+    /// jump). Cleared by any user input that changes the playhead
+    /// (CuePress, Seek, Stop, another HotCueSetOrJump, etc.).
+    pending_hot_cue: Option<PendingHotCueJump>,
+}
+
+#[derive(Copy, Clone)]
+struct PendingHotCueJump {
+    target_frame: u64,
+    fire_at_frame: u64,
 }
 
 impl DeckState {
@@ -511,6 +588,8 @@ impl DeckState {
             cue_frame: 0,
             cue_on: false,
             in_preview: false,
+            hot_cues: [None; 8],
+            hot_cue_preview: None,
             gain_linear: 1.0,
             speed_ratio: 1.0,
             nudge_offset: 0.0,
@@ -518,6 +597,7 @@ impl DeckState {
             pitch_lock: true,
             beat_align: true,
             pvoc: PhaseVocoder::new(2),
+            fx: FxChain::new(engine_rate),
             eq_low: Biquad::passthrough(),
             eq_mid: Biquad::passthrough(),
             eq_high: Biquad::passthrough(),
@@ -533,6 +613,7 @@ impl DeckState {
             loop_in: None,
             loop_out: None,
             loop_exit_pending: false,
+            pending_hot_cue: None,
         }
     }
 }
@@ -556,6 +637,28 @@ struct Mixer {
     cue_gain: f32,
     /// CUE↔MASTER blend in the headphones. 0 = pure master, 1 = pure cue.
     cue_mix: f32,
+    /// Final master-bus gain (post-mix, pre-output). 1.0 = unity.
+    /// Clamped 0..2 so a typo'd value can't ear-fry the user.
+    master_gain: f32,
+    /// Lock-free SPSC sink for Arcs we're done with. The audio thread
+    /// pushes the OLD Arc here (a cheap pointer copy) before overwriting
+    /// the deck field with the new one. A dedicated drain thread on the
+    /// host side pops + drops, so the dealloc cost (sometimes hundreds
+    /// of MB for the audio buffer) never lands on the audio callback.
+    /// On overflow we drop on the audio thread — better than blocking,
+    /// and overflow only happens if the drain thread is wedged.
+    retire_producer: rtrb::Producer<RetiredArc>,
+}
+
+/// Type-erased Arc handle pushed to `retire_producer`. The audio
+/// thread never inspects these — it just pushes the variant to keep
+/// the refcount alive past the callback. Drop happens on the drain
+/// thread (the audible win) when the variant goes out of scope there.
+#[allow(dead_code)] // the inner Arcs are load-bearing: their Drop is the whole point.
+enum RetiredArc {
+    Buffer(Arc<TrackBuffer>),
+    Analysis(Arc<TrackAnalysis>),
+    Stems(Arc<TrackStems>),
 }
 
 impl Mixer {
@@ -567,6 +670,10 @@ impl Mixer {
         }
         if let DeckCommand::SetCueMix { mix } = cmd {
             self.cue_mix = mix.clamp(0.0, 1.0);
+            return;
+        }
+        if let DeckCommand::SetMasterGain { gain } = cmd {
+            self.master_gain = gain.clamp(0.0, 2.0);
             return;
         }
 
@@ -606,73 +713,123 @@ impl Mixer {
             DeckId::B => self.deck_b.playing,
         };
 
+        // Variants that swap out an Arc<...> need access to BOTH the
+        // target deck and self.retire_producer, so they're handled
+        // before binding a single `&mut deck` (which would shut out
+        // the partial borrow of retire_producer).
+        match cmd {
+            DeckCommand::LoadTrack { buffer, analysis, .. } => {
+                let (old_buf, old_an, old_stems) = {
+                    let deck = match target_id {
+                        DeckId::A => &mut self.deck_a,
+                        DeckId::B => &mut self.deck_b,
+                    };
+                    let first_db_sample = analysis
+                        .downbeats
+                        .first()
+                        .and_then(|&i| analysis.beat_grid.get(i as usize).copied())
+                        .map(|t| t * analysis.sample_rate as f64)
+                        .filter(|s| s.is_finite() && *s >= 0.0)
+                        .unwrap_or(0.0);
+                    let old_buf = deck.buffer.replace(buffer);
+                    let old_an = deck.analysis.replace(analysis);
+                    let old_stems = deck.stems.take();
+                    deck.playhead = first_db_sample;
+                    deck.cue_frame = first_db_sample as u64;
+                    deck.in_preview = false;
+                    deck.playing = was_playing;
+                    deck.play_envelope = 0.0;
+                    deck.loop_in = None;
+                    deck.loop_out = None;
+                    deck.loop_exit_pending = false;
+                    deck.pending_hot_cue = None;
+                    (old_buf, old_an, old_stems)
+                };
+                if let Some(b) = old_buf {
+                    let _ = self.retire_producer.push(RetiredArc::Buffer(b));
+                }
+                if let Some(a) = old_an {
+                    let _ = self.retire_producer.push(RetiredArc::Analysis(a));
+                }
+                if let Some(s) = old_stems {
+                    let _ = self.retire_producer.push(RetiredArc::Stems(s));
+                }
+                return;
+            }
+            DeckCommand::UpdateAnalysis { analysis, .. } => {
+                let old_an = {
+                    let deck = match target_id {
+                        DeckId::A => &mut self.deck_a,
+                        DeckId::B => &mut self.deck_b,
+                    };
+                    if deck.cue_frame == 0 {
+                        if let Some(&i) = analysis.downbeats.first() {
+                            if let Some(&t) = analysis.beat_grid.get(i as usize) {
+                                let s = t * analysis.sample_rate as f64;
+                                if s.is_finite() && s >= 0.0 {
+                                    deck.cue_frame = s as u64;
+                                    if !deck.playing && deck.playhead == 0.0 {
+                                        deck.playhead = s;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    deck.analysis.replace(analysis)
+                };
+                if let Some(a) = old_an {
+                    let _ = self.retire_producer.push(RetiredArc::Analysis(a));
+                }
+                // Beat-align trigger on grid edits: when this deck is
+                // playing alongside the other one and `beat_align` is
+                // on, re-snap THIS deck's playhead to the other deck's
+                // beat phase. Lets the user nudge a wonky grid against
+                // a known-good reference and hear the alignment lock
+                // in step-by-step. Same `beat_align_to` helper that
+                // runs on play-start — just triggered by a grid edit
+                // instead.
+                let (this_align, other_playing, this_playing) = match target_id {
+                    DeckId::A => (
+                        self.deck_a.beat_align,
+                        self.deck_b.playing,
+                        self.deck_a.playing,
+                    ),
+                    DeckId::B => (
+                        self.deck_b.beat_align,
+                        self.deck_a.playing,
+                        self.deck_b.playing,
+                    ),
+                };
+                if this_align && this_playing && other_playing {
+                    let (this, other) = match target_id {
+                        DeckId::A => (&mut self.deck_a, &self.deck_b),
+                        DeckId::B => (&mut self.deck_b, &self.deck_a),
+                    };
+                    beat_align_to(this, other);
+                }
+                return;
+            }
+            DeckCommand::SetStems { stems, .. } => {
+                let old_stems = {
+                    let deck = match target_id {
+                        DeckId::A => &mut self.deck_a,
+                        DeckId::B => &mut self.deck_b,
+                    };
+                    deck.stems.replace(stems)
+                };
+                if let Some(s) = old_stems {
+                    let _ = self.retire_producer.push(RetiredArc::Stems(s));
+                }
+                return;
+            }
+            _ => {}
+        }
+
         let deck = match target_id {
             DeckId::A => &mut self.deck_a,
             DeckId::B => &mut self.deck_b,
         };
         match cmd {
-            DeckCommand::LoadTrack {
-                buffer, analysis, ..
-            } => {
-                deck.buffer = Some(buffer);
-                // Snap the playhead + cue point to the first detected
-                // downbeat. Most tracks have a second or three of
-                // silence / room tone before the first kick lands;
-                // dropping it as the natural start means Play / CUE
-                // both behave the way a DJ expects without any manual
-                // seeking. Falls back to t=0 when we don't yet have
-                // downbeats (v1 cache or no model installed).
-                let first_db_sample = analysis
-                    .downbeats
-                    .first()
-                    .and_then(|&i| analysis.beat_grid.get(i as usize).copied())
-                    .map(|t| t * analysis.sample_rate as f64)
-                    .filter(|s| s.is_finite() && *s >= 0.0)
-                    .unwrap_or(0.0);
-                deck.analysis = Some(analysis);
-                deck.playhead = first_db_sample;
-                deck.cue_frame = first_db_sample as u64;
-                deck.in_preview = false;
-                // Keep the deck's play state across a track swap — if the
-                // user was playing and loads a new track, it starts right
-                // away. Reset only when paused.
-                deck.playing = was_playing;
-                // Reset envelope so a fresh load doesn't carry over
-                // residual fade-out from the previous track.
-                deck.play_envelope = 0.0;
-                // Drop previous track's stems — the worker will push
-                // fresh ones when separation completes.
-                deck.stems = None;
-                // Loop points are per-track; carrying them across a
-                // track swap would point into nonsense source-frames
-                // (different total length / different beat grid).
-                deck.loop_in = None;
-                deck.loop_out = None;
-                deck.loop_exit_pending = false;
-            }
-            DeckCommand::UpdateAnalysis { analysis, .. } => {
-                // Slow-path arrival from the async analyser. Swap in
-                // the refined beat grid + downbeats without touching
-                // the playhead / play state — the user may already
-                // have started playing the track. If the cue point
-                // is still at t=0 (i.e. the deck loaded without
-                // downbeats), snap it to the first downbeat now so
-                // CUE works correctly.
-                if deck.cue_frame == 0 {
-                    if let Some(&i) = analysis.downbeats.first() {
-                        if let Some(&t) = analysis.beat_grid.get(i as usize) {
-                            let s = t * analysis.sample_rate as f64;
-                            if s.is_finite() && s >= 0.0 {
-                                deck.cue_frame = s as u64;
-                                if !deck.playing && deck.playhead == 0.0 {
-                                    deck.playhead = s;
-                                }
-                            }
-                        }
-                    }
-                }
-                deck.analysis = Some(analysis);
-            }
             DeckCommand::Play(_) => {
                 deck.playing = true;
                 deck.in_preview = false;
@@ -682,9 +839,12 @@ impl Mixer {
                 deck.in_preview = false;
             }
             DeckCommand::PlayToggle(_) => {
-                if deck.in_preview {
-                    // Pioneer "Cue Play": commit preview to normal playback.
+                if deck.in_preview || deck.hot_cue_preview.is_some() {
+                    // Pioneer "Cue Play": commit either preview to
+                    // normal playback. Both flags clear; the
+                    // playhead stays wherever it currently is.
                     deck.in_preview = false;
+                    deck.hot_cue_preview = None;
                 } else {
                     deck.playing = !deck.playing;
                 }
@@ -693,6 +853,8 @@ impl Mixer {
                 deck.playing = false;
                 deck.playhead = deck.cue_frame as f64;
                 deck.in_preview = false;
+                deck.hot_cue_preview = None;
+                deck.pending_hot_cue = None;
             }
             DeckCommand::SetCue { sample_pos, .. } => {
                 deck.cue_frame = sample_pos;
@@ -703,6 +865,11 @@ impl Mixer {
             // Pioneer CUE state machine. With quantize on, the "set cue"
             // branch snaps the new cue to the nearest beat from analysis.
             DeckCommand::CuePress(_) => {
+                // A new CUE press cancels any in-flight hot-cue
+                // preview or pending quantised jump so the two state
+                // machines stay mutually exclusive.
+                deck.hot_cue_preview = None;
+                deck.pending_hot_cue = None;
                 if deck.playing {
                     deck.playhead = deck.cue_frame as f64;
                     deck.playing = false;
@@ -722,6 +889,98 @@ impl Mixer {
                     deck.in_preview = false;
                 }
             }
+            // ---- Hot cues ----------------------------------------
+            //
+            // One command per press (set-vs-jump decided here, same
+            // philosophy as PlayToggle). Pioneer-style preview on
+            // paused decks reuses the CUE mental model but uses
+            // `hot_cue_preview` instead of `in_preview` so the two
+            // can't crosswire.
+            DeckCommand::HotCueSetOrJump { slot, .. } => {
+                let slot = slot as usize;
+                if slot >= deck.hot_cues.len() {
+                    return;
+                }
+                match deck.hot_cues[slot] {
+                    None => {
+                        // Empty slot — store current playhead.
+                        // Snap to nearest beat when Quantize is on
+                        // (same helper the CUE machine uses).
+                        let snapped = snap_to_beat(deck);
+                        deck.hot_cues[slot] = Some(snapped);
+                    }
+                    Some(pos) => {
+                        // Cancel any in-flight CUE preview — the
+                        // user pressed a different button, the
+                        // existing preview should drop.
+                        deck.in_preview = false;
+                        deck.hot_cue_preview = None;
+                        if deck.playing {
+                            // Mid-play jump. With Quantize on, defer
+                            // the teleport until the next beat in the
+                            // *current* playhead's beat grid — sloppy
+                            // press timing then still lands on a beat
+                            // boundary. Quantize off (or no beat
+                            // grid) → immediate jump as before.
+                            if let Some(fire_at) = next_beat_frame(deck) {
+                                deck.pending_hot_cue = Some(PendingHotCueJump {
+                                    target_frame: pos,
+                                    fire_at_frame: fire_at,
+                                });
+                            } else {
+                                deck.pending_hot_cue = None;
+                                deck.playhead = pos as f64;
+                            }
+                        } else {
+                            // Paused press — preview while held.
+                            // Always immediate; quantising a preview
+                            // would mean nothing happens until the
+                            // user lifts (which never advances the
+                            // playhead while paused).
+                            deck.pending_hot_cue = None;
+                            deck.playhead = pos as f64;
+                            deck.playing = true;
+                            deck.hot_cue_preview = Some(slot as u8);
+                        }
+                    }
+                }
+            }
+            DeckCommand::HotCueRelease { slot, .. } => {
+                let slot = slot as u8;
+                if deck.hot_cue_preview == Some(slot) {
+                    if let Some(pos) = deck.hot_cues[slot as usize] {
+                        deck.playhead = pos as f64;
+                    }
+                    deck.playing = false;
+                    deck.hot_cue_preview = None;
+                }
+            }
+            DeckCommand::HotCueClear { slot, .. } => {
+                let slot = slot as usize;
+                if slot < deck.hot_cues.len() {
+                    deck.hot_cues[slot] = None;
+                    // If the user clears the slot currently being
+                    // previewed, stop the preview cleanly. Same goes
+                    // for a quantised jump that was waiting to land
+                    // on the (now-empty) slot.
+                    if deck.hot_cue_preview == Some(slot as u8) {
+                        deck.playing = false;
+                        deck.hot_cue_preview = None;
+                    }
+                    if let Some(p) = deck.pending_hot_cue {
+                        if Some(p.target_frame) == deck.hot_cues[slot] {
+                            deck.pending_hot_cue = None;
+                        }
+                    }
+                }
+            }
+            DeckCommand::HotCueLoad { slots, .. } => {
+                deck.hot_cues = slots;
+                // Loading a fresh track invalidates any in-flight
+                // preview or pending jump — be defensive.
+                deck.hot_cue_preview = None;
+                deck.pending_hot_cue = None;
+            }
             DeckCommand::Seek { sample_pos, .. } => {
                 // Clamp to the loaded buffer's range so a wild seek (e.g.,
                 // from jog-scrub or a click past the waveform) leaves the
@@ -733,6 +992,7 @@ impl Mixer {
                     sample_pos
                 };
                 deck.playhead = pos as f64;
+                deck.pending_hot_cue = None;
             }
             DeckCommand::SetSpeed { ratio, .. } => {
                 deck.speed_ratio = ratio.clamp(0.5, 2.0);
@@ -784,19 +1044,6 @@ impl Mixer {
                 deck.gain_instruments = gain.clamp(0.0, 1.5);
             }
             DeckCommand::SetStems { stems, .. } => {
-                if let Some(buf) = deck.buffer.as_ref() {
-                    let ch_ok = stems.channels as usize == buf.channels as usize;
-                    let len_ok = stems.frames() + (stems.sample_rate as usize)
-                        >= buf.frames();
-                    eprintln!(
-                        "audio: SetStems — buf {} fr @ {} Hz {} ch | stems {} fr @ {} Hz {} ch | will use? {}",
-                        buf.frames(), buf.sample_rate, buf.channels,
-                        stems.frames(), stems.sample_rate, stems.channels,
-                        ch_ok && len_ok,
-                    );
-                } else {
-                    eprintln!("audio: SetStems with no buffer loaded — dropping");
-                }
                 deck.stems = Some(stems);
             }
             DeckCommand::SetBeatAlign { on, .. } => {
@@ -804,6 +1051,27 @@ impl Mixer {
             }
             DeckCommand::SetCueOn { on, .. } => {
                 deck.cue_on = on;
+            }
+            DeckCommand::SetFxKind { kind, .. } => {
+                deck.fx.kind = match kind {
+                    control::FxKindId::Echo => fx::FxKind::Echo,
+                    control::FxKindId::Reverb => fx::FxKind::Reverb,
+                };
+            }
+            DeckCommand::SetFxOn { on, .. } => {
+                deck.fx.on = on;
+            }
+            DeckCommand::SetFxColour { value, .. } => {
+                deck.fx.colour = value.clamp(0.0, 1.0);
+            }
+            DeckCommand::SetFxTime { value, .. } => {
+                deck.fx.time = value.clamp(0.0, 1.0);
+            }
+            DeckCommand::SetFxMix { value, .. } => {
+                deck.fx.mix = value.clamp(0.0, 1.0);
+            }
+            DeckCommand::SetFxBeats { beats, .. } => {
+                deck.fx.beats = beats.clamp(0.0625, 8.0);
             }
             DeckCommand::LoopSetIn { .. } => {
                 let snapped = snap_to_beat_always(deck);
@@ -867,6 +1135,15 @@ impl Mixer {
             DeckCommand::Sync { .. } => unreachable!("handled above"),
             DeckCommand::SetCueGain { .. } => unreachable!("handled above"),
             DeckCommand::SetCueMix { .. } => unreachable!("handled above"),
+            DeckCommand::SetMasterGain { .. } => unreachable!("handled above"),
+            // Compiler proves the previous match consumed these via
+            // returning early — silence the "unreachable" lint while
+            // keeping the arm so future variant adds still trigger
+            // exhaustiveness errors here.
+            #[allow(unreachable_patterns)]
+            DeckCommand::LoadTrack { .. }
+            | DeckCommand::UpdateAnalysis { .. }
+            | DeckCommand::SetStems { .. } => unreachable!("handled above"),
         }
 
         // Post-apply: beat-align this deck if a paused→playing transition
@@ -907,10 +1184,11 @@ impl Mixer {
             self.cue_scratch[..needed].fill(0.0);
         }
 
-        // Deck A: render → EQ → fade envelope → (cue tap) → gain → master
+        // Deck A: render → EQ → FX → fade envelope → (cue tap) → gain → master
         scratch_a.fill(0.0);
         render_into(&mut self.deck_a, scratch_a, out_channels, self.engine_sample_rate);
         apply_eq(&mut self.deck_a, scratch_a, out_channels);
+        apply_fx(&mut self.deck_a, scratch_a, out_channels);
         apply_play_envelope(
             &mut self.deck_a,
             scratch_a,
@@ -933,6 +1211,7 @@ impl Mixer {
         scratch_b.fill(0.0);
         render_into(&mut self.deck_b, scratch_b, out_channels, self.engine_sample_rate);
         apply_eq(&mut self.deck_b, scratch_b, out_channels);
+        apply_fx(&mut self.deck_b, scratch_b, out_channels);
         apply_play_envelope(
             &mut self.deck_b,
             scratch_b,
@@ -947,6 +1226,16 @@ impl Mixer {
         let g_b = self.deck_b.gain_linear;
         for (o, s) in out.iter_mut().zip(scratch_b.iter()) {
             *o += *s * g_b;
+        }
+
+        // Master-bus gain: scale the entire mix uniformly. Lives
+        // here (after deck contributions sum) and BEFORE the cue
+        // tap blends, so the cue bus snapshot still hears the mix
+        // at unity even when the master is dipped.
+        if (self.master_gain - 1.0).abs() > f32::EPSILON {
+            for s in out.iter_mut() {
+                *s *= self.master_gain;
+            }
         }
 
         // Headphone bus: blend the cued-decks sum with the master mix, then
@@ -964,12 +1253,19 @@ impl Mixer {
         // Push the cue mix to the secondary stream's ring buffer. If the
         // ring is full (cue stream lagging) we drop the excess — silently
         // accepting that cue will fall behind master rather than blocking
-        // the audio thread.
+        // the audio thread. Pushed FRAME-aligned so a partial-fill never
+        // strands a left-without-right (or vice versa) and channel-swaps
+        // the cue stream for the rest of the session.
         if let Some(prod) = self.cue_producer.as_mut() {
-            for s in self.cue_scratch[..needed].iter() {
-                if prod.push(*s).is_err() {
+            let mut i = 0;
+            while i + out_channels <= needed {
+                if prod.slots() < out_channels {
                     break;
                 }
+                for s in &self.cue_scratch[i..i + out_channels] {
+                    let _ = prod.push(*s);
+                }
+                i += out_channels;
             }
         }
 
@@ -979,6 +1275,19 @@ impl Mixer {
 }
 
 fn render_into(deck: &mut DeckState, scratch: &mut [f32], out_channels: usize, engine_rate: u32) {
+    // Pending quantised hot-cue jump: if the playhead has crossed
+    // (or reached) the fire-at frame computed when the user pressed
+    // the cue button, teleport now and clear the pending state. Per-
+    // callback resolution (~5–10 ms) is well under one beat at any
+    // realistic BPM — the user's press timing is forgiven up to half
+    // a beat in either direction (`snap_to_beat` rounded their press
+    // to the nearest beat boundary when arming the jump).
+    if let Some(p) = deck.pending_hot_cue {
+        if deck.playhead as u64 >= p.fire_at_frame {
+            deck.playhead = p.target_frame as f64;
+            deck.pending_hot_cue = None;
+        }
+    }
     // PV path doesn't support reverse playback (FFT analysis hop is
     // positive by construction). If the user nudged effective speed
     // non-positive — e.g., backward jog scrub — fall through to the
@@ -991,6 +1300,18 @@ fn render_into(deck: &mut DeckState, scratch: &mut [f32], out_channels: usize, e
     } else {
         render_deck(deck, scratch, out_channels, engine_rate);
     }
+}
+
+/// FX chain: sync the chain's effective BPM (analysis × speed
+/// × nudge) and run it. Lives between EQ and the play envelope so
+/// the cue bus tap picks up the wet signal too (PFL-faithful).
+fn apply_fx(deck: &mut DeckState, buf: &mut [f32], out_channels: usize) {
+    let base_bpm = deck.analysis.as_ref().map(|a| a.bpm).unwrap_or(0.0);
+    if base_bpm > 0.0 {
+        let effective = base_bpm * (deck.speed_ratio + deck.nudge_offset);
+        deck.fx.set_bpm(effective);
+    }
+    deck.fx.apply(buf, out_channels);
 }
 
 fn apply_eq(deck: &mut DeckState, buf: &mut [f32], out_channels: usize) {
@@ -1058,6 +1379,12 @@ fn publish_telemetry(deck: &DeckState, tel: &DeckTelemetry) {
     tel.cue_on.store(deck.cue_on, Ordering::Relaxed);
     tel.loop_in.store(deck.loop_in.unwrap_or(u64::MAX), Ordering::Relaxed);
     tel.loop_out.store(deck.loop_out.unwrap_or(u64::MAX), Ordering::Relaxed);
+    for (slot, atomic) in tel.hot_cues.iter().enumerate() {
+        atomic.store(
+            deck.hot_cues[slot].unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
 }
 
 /// Shift `this` deck's playhead so its nearest beat lines up in real time
@@ -1161,6 +1488,7 @@ fn render_deck(deck: &mut DeckState, out: &mut [f32], out_channels: usize, engin
     let use_stems = matches!(
         stems_arc.as_deref(),
         Some(s) if s.channels as usize == in_channels
+            && s.sample_rate == buf.sample_rate
             && s.frames() + (s.sample_rate as usize) >= total_frames
     );
     // When stems are in play, shrink the playable range to whatever
@@ -1278,6 +1606,7 @@ fn render_deck_pv(deck: &mut DeckState, out: &mut [f32], out_channels: usize, en
     let use_stems = matches!(
         stems_arc.as_deref(),
         Some(s) if s.channels as usize == in_channels
+            && s.sample_rate == buf.sample_rate
             && s.frames() + (s.sample_rate as usize) >= total_frames
     );
     // When stems are in play, shrink the playable range to whatever
@@ -1294,7 +1623,11 @@ fn render_deck_pv(deck: &mut DeckState, out: &mut [f32], out_channels: usize, en
     let src_step = buf_arc.sample_rate as f64 / engine_rate as f64;
     let total_out_frames = out.len() / out_channels;
     let mut written = 0;
-    let speed = (deck.speed_ratio + deck.nudge_offset).clamp(0.1, 4.0);
+    // Hard upper bound at 2.0 = MAX_HOP_A / HOP_S. Above that the PV's
+    // hop_a_accum residual grows unboundedly each frame (next_hop_a
+    // clamps h to MAX_HOP_A but only subtracts h, not the requested
+    // amount), so output starts to lag tempo and never catches up.
+    let speed = (deck.speed_ratio + deck.nudge_offset).clamp(0.1, 2.0);
 
     while written < total_out_frames {
         if deck.pvoc.ready() == 0 {
@@ -1364,6 +1697,10 @@ fn cmd_target(cmd: &DeckCommand) -> DeckId {
         | DeckCommand::JumpToCue(deck)
         | DeckCommand::CuePress(deck)
         | DeckCommand::CueRelease(deck)
+        | DeckCommand::HotCueSetOrJump { deck, .. }
+        | DeckCommand::HotCueRelease { deck, .. }
+        | DeckCommand::HotCueClear { deck, .. }
+        | DeckCommand::HotCueLoad { deck, .. }
         | DeckCommand::Seek { deck, .. }
         | DeckCommand::SetSpeed { deck, .. }
         | DeckCommand::NudgeSpeed { deck, .. }
@@ -1376,6 +1713,12 @@ fn cmd_target(cmd: &DeckCommand) -> DeckId {
         | DeckCommand::SetEqHigh { deck, .. }
         | DeckCommand::SetBeatAlign { deck, .. }
         | DeckCommand::SetCueOn { deck, .. }
+        | DeckCommand::SetFxKind { deck, .. }
+        | DeckCommand::SetFxOn { deck, .. }
+        | DeckCommand::SetFxColour { deck, .. }
+        | DeckCommand::SetFxTime { deck, .. }
+        | DeckCommand::SetFxMix { deck, .. }
+        | DeckCommand::SetFxBeats { deck, .. }
         | DeckCommand::LoopSetIn { deck }
         | DeckCommand::LoopSetOut { deck }
         | DeckCommand::LoopExit { deck }
@@ -1384,8 +1727,10 @@ fn cmd_target(cmd: &DeckCommand) -> DeckId {
         | DeckCommand::LoopClear { deck }
         | DeckCommand::LoopAuto { deck, .. }
         | DeckCommand::Sync { deck } => *deck,
-        DeckCommand::SetCueGain { .. } | DeckCommand::SetCueMix { .. } => {
-            unreachable!("global headphone-bus commands have no deck target — handled in apply()")
+        DeckCommand::SetCueGain { .. }
+        | DeckCommand::SetCueMix { .. }
+        | DeckCommand::SetMasterGain { .. } => {
+            unreachable!("global bus commands have no deck target — handled in apply()")
         }
     }
 }
@@ -1514,6 +1859,31 @@ fn snap_to_beat(deck: &DeckState) -> u64 {
     ((nearest * sr).max(0.0)) as u64
 }
 
+/// Source-frame of the next beat *strictly after* the current
+/// playhead. Used by the quantised hot-cue jump: fire the jump when
+/// playback crosses this point. Returns `None` when Quantize is off,
+/// no analysis is loaded, or the playhead is past the last beat in
+/// the grid — caller falls back to immediate jump in those cases.
+fn next_beat_frame(deck: &DeckState) -> Option<u64> {
+    if !deck.quantize {
+        return None;
+    }
+    let an = deck.analysis.as_ref()?;
+    let buf = deck.buffer.as_ref()?;
+    if an.beat_grid.is_empty() { return None; }
+    let sr = buf.sample_rate as f64;
+    if sr <= 0.0 { return None; }
+    let t = deck.playhead / sr;
+    // First beat strictly after `t`. Adding a small epsilon avoids
+    // returning the current beat when we land exactly on one (which
+    // would fire the jump immediately).
+    const EPS: f64 = 1e-4;
+    let needle = t + EPS;
+    let idx = an.beat_grid.partition_point(|&b| b <= needle);
+    if idx >= an.beat_grid.len() { return None; }
+    Some(((an.beat_grid[idx] * sr).max(0.0)) as u64)
+}
+
 fn nearest_beat_secs(t: f64, beats: &[f64]) -> f64 {
     debug_assert!(!beats.is_empty());
     match beats.binary_search_by(|b| {
@@ -1543,6 +1913,7 @@ fn build_stream(
     deck_a_tel: DeckTelemetry,
     deck_b_tel: DeckTelemetry,
     cue_producer: Option<rtrb::Producer<f32>>,
+    retire_producer: rtrb::Producer<RetiredArc>,
 ) -> Result<Stream> {
     let mut mixer = Mixer {
         deck_a: DeckState::new(sample_rate),
@@ -1555,6 +1926,8 @@ fn build_stream(
         cue_producer,
         cue_gain: 0.15,
         cue_mix: 1.0,
+        master_gain: 1.0,
+        retire_producer,
     };
     let err_fn = |e| eprintln!("audio: master stream error: {e}");
     device

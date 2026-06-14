@@ -5,6 +5,8 @@ output latency on PipeWire, MIDI controller support, in-app BPM + beat-grid
 + key detection, harmonic-mix filtering, and a phase vocoder for key-locked
 tempo control.
 
+![ODJ UI](docs/img/odj-ui.png)
+
 Built as a side project; on the road to driving a custom microcontroller
 hardware controller (RP2040 / ESP32-S3) speaking USB MIDI.
 
@@ -50,13 +52,46 @@ Built features:
   play immediately; the mixer transparently switches from the single
   buffer to the 4-stem mix when the worker finishes.
 - Musical key detection (Krumhansl-Schmuckler) in Camelot notation.
-- Auto Sync (BPM match) + auto Beat Align (phase-snap on play start).
+- Auto Sync (BPM match) + auto Beat Align (phase-snap on play start
+  *and* on every manual grid edit — so nudging a wonky grid against a
+  known-good reference deck audibly converges step-by-step).
 - Pioneer-style CUE state machine including the "Cue Play" commit.
+- **Hot cues** — 8 slots per deck with the same set-vs-jump-vs-preview
+  semantics as CUE. Jumps are beat-quantised when Q is on (defers
+  the teleport to the next beat so sloppy press timing still lands
+  cleanly). Right-click a slot to label it, pick a colour, or delete
+  it. Persisted per-track to `.track-meta`. Coloured tick markers
+  appear on both waveforms.
+- **Manual beat-grid editing** — Grid Adjust tab in the source rail.
+  Nudge ±1/±10 ms, skip ±1/2/4/8 beats, ½× / 2× BPM, set downbeat at
+  playhead, reset. Locked by default each session so a stray click
+  can't mangle a grid. Overrides persist to `.track-meta`; the manual
+  grid wins over the analyser's refined output on every subsequent
+  load.
+- **Loops** — beat-quantised IN/OUT, one-shot 4-beat auto-loop, ½ /
+  ×2 length, graceful Exit (plays out the current iteration), live
+  "recording" highlight from IN to the playhead.
+- **Per-deck FX** — beat-synced Echo (Type B, beat-picker UI) and
+  Schroeder Reverb (Type A, continuous Time knob). Post-EQ, pre-fader
+  so the cue bus tap is the wet signal.
+- **Auto-mix** — armed state pre-loads a candidate next track on the
+  idle deck; active blend ramps gains and drum-stem gates over the
+  outgoing track's last 16 bars. Any deck-affecting user input
+  cancels in-flight.
 - Vinyl-style temporary push/pull nudge while held.
 - Paused jog = audible scrub (forward + reverse). Click-to-seek on
   either waveform.
-- Sortable track list (Title / Artist / Key / BPM), favourites, harmonic
-  compatibility filter, background analysis worker with disk persistence.
+- Sortable track list (Title / Artist / Genre / Key / BPM / Length /
+  Plays), favourites, harmonic compatibility filter, background
+  analysis worker with disk persistence (and a `catch_unwind` around
+  the DSP so a single pathological track can't kill the worker).
+- **Session history** — every track played for ≥30 s is logged to
+  `.history`. History tab groups by 2-hour gap into sessions;
+  one-click setlist export to clipboard.
+- **Settings UI** — audio/cue/MIDI device pickers, music-dir path,
+  per-deck startup defaults. Persisted under XDG `~/.config/odj/`.
+- **System theme** — light / dark follows the OS (gdbus + gsettings
+  fallback); custom palette tokens for accents, stems and hot cues.
 - LPD8 hardcoded mapping (pads + 8 knobs) with on-screen mirroring.
 - **Homebrew hardware controller** prototype under `hardware/` — RP2040
   + optical encoder + arcade buttons + 74HC4051 analog mux. Class-
@@ -232,10 +267,12 @@ is logged to stderr — read them off and edit the `match` arms in
 ├── crates/
 │   ├── control/        # DeckCommand enum, MusicalKey, ring buffer types
 │   ├── decode/         # symphonia → TrackBuffer
-│   ├── analysis/       # BPM + beat grid (DSP) + key (Krumhansl)
-│   ├── audio/          # cpal stream(s), mixer, EQ, phase vocoder,
-│   │                   #   beat align, cue ring + headphone bus
-│   └── ui/             # eframe app, track table, persistence
+│   ├── analysis/       # BPM + beat grid + downbeats (ONNX) + key
+│   ├── stems/          # HTDemucs ONNX wrapper
+│   ├── audio/          # cpal stream(s), mixer, EQ, FX, phase vocoder
+│   └── ui/             # eframe app — see crate-level breakdown in
+│                       #   DESIGN.md §4 (auto_mix, grid_edit, history,
+│                       #   palette, persistence, settings, theme, fonts)
 └── hardware/
     ├── firmware/       # Pico SDK C project (breadboard Deck A)
     ├── pcb/            # two-deck carrier — SKiDL netlist + KiCad

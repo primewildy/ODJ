@@ -187,7 +187,10 @@ mod tests {
         for &hz in &[0.0_f32, 100.0, 500.0, 999.0, 1000.0, 5000.0, 11000.0] {
             let m = hz_to_slaney_mel(hz);
             let back = slaney_mel_to_hz(m);
-            assert!((back - hz).abs() < 1e-3, "roundtrip {hz} -> {m} -> {back}");
+            // 1e-2 Hz at 5 kHz = 0.0002% — well below human pitch
+            // discrimination and matches what f32 precision can hold
+            // through the log/exp pair. Was 1e-3 — too tight for f32.
+            assert!((back - hz).abs() < 1e-2, "roundtrip {hz} -> {m} -> {back}");
         }
     }
 }

@@ -12,6 +12,15 @@ pub enum DeckId {
     B,
 }
 
+/// Wire-compatible identifier for an FX effect. The audio crate's
+/// `FxKind` is the source of truth; this control-side mirror lets
+/// the UI send `SetFxKind` without depending on the audio crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FxKindId {
+    Echo,
+    Reverb,
+}
+
 /// Decoded, ready-to-play audio buffer. Interleaved f32 samples.
 pub struct TrackBuffer {
     pub samples: Vec<f32>,
@@ -171,6 +180,39 @@ pub enum DeckCommand {
     /// Match this deck's tempo to the OTHER deck's effective BPM. Clamped
     /// to ±8%. No-op if either deck's analysis BPM is missing.
     Sync { deck: DeckId },
+
+    // ---- Hot cues (8 slots per deck) -----------------------------
+    //
+    // One press dispatches to "set" or "jump" depending on whether
+    // the slot is currently set — the engine is authoritative, same
+    // shape as `PlayToggle`. Pioneer-style preview behaviour: while
+    // paused, jumping to a set slot starts playback as a preview
+    // that releases back to the slot's frame position on
+    // `HotCueRelease`.
+
+    /// Per-slot transport press.
+    /// - Empty slot → store current playhead in the slot
+    ///   (snapped to the nearest beat if `quantize` is on).
+    /// - Set slot while playing → seek to the slot's frame, keep
+    ///   playing.
+    /// - Set slot while paused → seek to the slot's frame and
+    ///   start playback as a *preview* (mirrors the CUE state
+    ///   machine but the return point is the slot, not `cue_frame`).
+    HotCueSetOrJump { deck: DeckId, slot: u8 },
+    /// Release the preview started by a `HotCueSetOrJump` on a
+    /// paused deck: jump back to the slot's frame and pause. No-op
+    /// unless THIS slot's preview is active (so two pads pressed in
+    /// quick succession can't crosswire).
+    HotCueRelease { deck: DeckId, slot: u8 },
+    /// Forget the slot's stored frame. UI-side shift-click or a
+    /// future MIDI shift-pad chord. No-op if the slot was already
+    /// empty.
+    HotCueClear { deck: DeckId, slot: u8 },
+    /// Bulk-load all eight slots — sent by the UI right after a
+    /// `LoadTrack` with positions converted from the `.track-meta`
+    /// store (UI does seconds↔frames using the track's sample
+    /// rate). `None` clears the slot, `Some(frame)` sets it.
+    HotCueLoad { deck: DeckId, slots: [Option<u64>; 8] },
     /// When ON, transitions from paused→playing on this deck (CuePress
     /// paused branch or PlayToggle pause→play) shift this deck's playhead
     /// so its nearest beat aligns with the OTHER deck's nearest beat. Used
@@ -188,6 +230,43 @@ pub enum DeckCommand {
     /// 0 = pure master in the headphones, 1 = pure cue (only the decks
     /// with `cue_on`). Intermediate values mix the two. Clamped to [0, 1].
     SetCueMix { mix: f32 },
+    /// Master-bus output gain (post-mix). Applied AFTER each deck's
+    /// per-channel gain so it scales the whole mix uniformly. The cue
+    /// bus is NOT affected — you can still hear what's playing while
+    /// the master is dipped. Clamped to [0, 2].
+    SetMasterGain { gain: f32 },
+
+    // ----- FX (post-EQ pre-fader) ----------------------------------
+    //
+    // The deck's FX chain currently hosts a single Echo effect; more
+    // effect types (Reverb, Filter, …) land as the chain grows. The
+    // command surface is already shaped for that — pass the effect's
+    // *parameter* names rather than the underlying DSP variable, so a
+    // new effect just re-interprets `colour` / `time` / `mix`.
+
+    /// Select the active FX kind for a deck. The UI's effect-picker
+    /// dropdown maps each entry to one of these values; the engine
+    /// swaps which apply path runs without re-allocating either
+    /// effect's state.
+    SetFxKind { deck: DeckId, kind: FxKindId },
+    /// Turn the per-deck FX bypass on/off. When OFF, the chain still
+    /// runs to decay its tail (no hard-zero clicks); the dry path is
+    /// just routed straight through.
+    SetFxOn { deck: DeckId, on: bool },
+    /// FX "Colour" parameter (0..1). For Echo this is the feedback
+    /// coefficient. For Reverb (when it lands) it'll be damping. The
+    /// engine clamps; UI shows whatever label the active effect uses.
+    SetFxColour { deck: DeckId, value: f32 },
+    /// FX "Time" parameter (0..1, free-time effects only). Not used
+    /// by tempo-synced effects like Echo — they get `SetFxBeats`
+    /// instead.
+    SetFxTime { deck: DeckId, value: f32 },
+    /// FX wet/dry mix (0 = dry, 1 = fully wet).
+    SetFxMix { deck: DeckId, value: f32 },
+    /// Tempo-synced delay length in beats (typical values 0.25, 0.5,
+    /// 1, 2). The engine converts to samples using the deck's
+    /// *effective* BPM so the delay tracks tempo nudges.
+    SetFxBeats { deck: DeckId, beats: f32 },
     /// Set the loop IN point to the deck's current playhead, snapped to
     /// the nearest beat. Does NOT activate the loop until LoopSetOut is
     /// also called — clears any pending exit.
