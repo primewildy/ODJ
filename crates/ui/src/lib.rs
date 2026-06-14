@@ -579,6 +579,13 @@ pub struct DjApp {
     /// for the rest of the session — toggling the "Stream to room"
     /// setting just flips its `enabled` gate.
     network_output: Option<network_output::NetworkOutput>,
+    /// The UDN we last successfully told to Play, with the control
+    /// URL we used. Set when we send SetAVTransportURI+Play, cleared
+    /// after Stop. Per-frame logic in `sync_network_play_state`
+    /// compares this against the user's pinned selection (plus its
+    /// live discovery status) and fires Stop/Play SOAP calls on
+    /// transitions only — never per frame.
+    network_active: Option<(String, String)>,
     /// Cached filtered+sorted track index list, with a fingerprint of
     /// the inputs used to produce it. Re-using the cache on frames
     /// where nothing changed avoids the per-frame
@@ -827,6 +834,75 @@ impl DjApp {
             settings_open: false,
             upnp_discovery: upnp::DiscoveryHandle::spawn(upnp_seeds),
             network_output,
+            network_active: None,
+        }
+    }
+
+    /// Per-frame state reconciliation for network output. Fires SOAP
+    /// commands only on a state change (pin/unpin, renderer comes
+    /// online, IP changes) — never per frame on steady state.
+    ///
+    /// Target state: `Some(udn)` iff the user has pinned a renderer
+    /// AND that renderer is currently visible in discovery AND we
+    /// have an HTTP server URL we can hand it. Active state mirrors
+    /// what we've actually told a renderer to Play.
+    ///
+    ///   target == active        → do nothing
+    ///   target.is_some() & diff → Stop old (if any), Play new
+    ///   target.is_none() & some → Stop old, clear active
+    ///
+    /// All SOAP calls fire-and-forget (their own threads); a slow
+    /// renderer can't hang the UI. Failures self-heal next frame
+    /// the moment any input changes (active stays untouched on
+    /// failed Play, so we retry; stays untouched on failed Stop,
+    /// so we just give up and the renderer's session times out
+    /// naturally).
+    fn sync_network_play_state(&mut self) {
+        let Some(no) = self.network_output.as_ref() else { return };
+        // MIME we serve over HTTP — DLNA-standard big-endian L16
+        // PCM. Naim plays this natively (no transcoding), so the
+        // renderer-side latency is just buffering, not codec decode.
+        let mime = format!(
+            "audio/L16;rate={};channels={}",
+            self.engine.sample_rate(),
+            self.engine.out_channels(),
+        );
+        let renderers = self.upnp_discovery.renderers();
+        let target = self.settings.network_renderer_udn.as_ref()
+            .and_then(|udn| renderers.iter().find(|r| &r.udn == udn))
+            .and_then(|r| {
+                let url = no.lan_url_for(r.address)?;
+                Some((r.udn.clone(), r.av_transport_control.clone(), r.name.clone(), url))
+            });
+
+        match (&self.network_active, target) {
+            (None, None) => { /* idle */ }
+            (Some(_), None) => {
+                // Unpinned, or pinned renderer went offline. Stop.
+                if let Some((_, ctrl)) = self.network_active.take() {
+                    upnp::stop(ctrl, "(deselected)".into());
+                }
+            }
+            (None, Some((udn, ctrl, name, url))) => {
+                upnp::play_url(ctrl.clone(), url, mime.clone(), name);
+                self.network_active = Some((udn, ctrl));
+            }
+            (Some((cur_udn, _cur_ctrl)), Some((udn, ctrl, name, url))) if cur_udn != &udn => {
+                // Different renderer pinned. Stop the old, play the
+                // new. Take here so we don't double-borrow.
+                if let Some((_, old_ctrl)) = self.network_active.take() {
+                    upnp::stop(old_ctrl, "(switching)".into());
+                }
+                upnp::play_url(ctrl.clone(), url, mime.clone(), name);
+                self.network_active = Some((udn, ctrl));
+            }
+            (Some((cur_udn, cur_ctrl)), Some((udn, ctrl, name, url))) if cur_udn == &udn && cur_ctrl != &ctrl => {
+                // Same UDN but new control URL — IP changed under us
+                // (DHCP). Re-issue Play at the new URL.
+                upnp::play_url(ctrl.clone(), url, mime.clone(), name);
+                self.network_active = Some((udn, ctrl));
+            }
+            (Some(_), Some(_)) => { /* already playing on the right target */ }
         }
     }
     fn deck_mut(&mut self, deck: DeckId) -> &mut DeckUi {
@@ -2601,6 +2677,13 @@ impl eframe::App for DjApp {
             self.cancel_auto_mix();
         }
         self.render_settings_window(&ctx);
+        // Reconcile network-output play state at the end of every
+        // frame. Cheap when nothing changed (one Vec snapshot from
+        // the discovery handle, one Option compare); fires the
+        // Play/Stop SOAP calls only on transitions. Sits here at the
+        // bottom so any settings-window edit this frame is reflected
+        // immediately.
+        self.sync_network_play_state();
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -2609,6 +2692,14 @@ impl eframe::App for DjApp {
         // their last-saved values on the next run.
         if let Err(e) = self.settings.save() {
             eprintln!("settings: save on exit failed: {e}");
+        }
+        // Best-effort UPnP Stop so the Naim doesn't hold a dead
+        // session open after we close. Spawned in a thread with a
+        // ~2-second SOAP budget — if the renderer is unreachable it
+        // just times out and the app exit continues. We don't wait
+        // for the thread; the kernel reaps it.
+        if let Some((_, ctrl)) = self.network_active.take() {
+            upnp::stop(ctrl, "(app exit)".into());
         }
     }
 }

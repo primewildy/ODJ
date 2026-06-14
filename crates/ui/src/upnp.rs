@@ -279,6 +279,200 @@ fn extract_tag(xml: &str, tag: &str) -> Option<String> {
     Some(xml[start..start + end].trim().to_string())
 }
 
+// ---- SOAP control --------------------------------------------------
+//
+// UPnP `AVTransport:1` actions, fire-and-forget. Each public function
+// spawns a thread so a slow / broken renderer can't hang the UI; on
+// failure we log to stderr and move on. Recovery is the next state-
+// transition retry (re-selecting the renderer, or the renderer
+// coming back into discovery after a nap).
+//
+// We use `:1` rather than `:2` for the SOAPACTION header because all
+// three Naim devices we've tested expose at least :1 (the Mu-so also
+// has :2; the Qute and Uniti only have :1). The action names and
+// argument shapes are identical between versions.
+
+/// Tell the renderer to GET audio from `stream_url` (whose content
+/// has MIME type `mime`, e.g. `audio/L16;rate=44100;channels=2`),
+/// then Play. Two SOAP calls in one. Runs on a fresh thread.
+///
+/// The MIME goes into the `<res protocolInfo=…>` of a DIDL-Lite blob
+/// inside `CurrentURIMetaData`. Naim's KnOS firmware rejects bare
+/// SetAVTransportURI calls (errorCode 714: Illegal MIME-type) when
+/// the metadata is empty — it can't sniff from a URL alone, so we
+/// have to declare it. `audioBroadcast` is the right `upnp:class`
+/// for a continuous live stream like ours.
+pub fn play_url(control_url: String, stream_url: String, mime: String, label: String) {
+    std::thread::Builder::new()
+        .name("dj-upnp-play".into())
+        .spawn(move || {
+            // protocolInfo's 4th field is DLNA "additional info" —
+            // semicolon-separated key=value pairs. We set:
+            //   DLNA.ORG_PN=LPCM      profile name (uncompressed PCM)
+            //   DLNA.ORG_OP=00        no byte-/time-based seek (live)
+            //   DLNA.ORG_CI=0         no conversion indicator
+            //   DLNA.ORG_FLAGS=…      flag bitfield
+            // The flag bits we set:
+            //   bit 24 STREAMING_TRANSFER_MODE — "live, prioritise
+            //                                    low latency over
+            //                                    reliability"
+            //   bit 22 BACKGROUND_TRANSFER_MODE off
+            //   bit 21 CONNECTION_STALLING     — sender pauses fine
+            //   bit 20 DLNA_v1_5_FLAG          — speak v1.5 dialect
+            // Encoded as 8 hex digits for the flags + 24 hex zero
+            // pad = 32 chars total. `01700000…` is what most live
+            // audio broadcasters (Shoutcast etc.) advertise; Naim
+            // recognises this and uses a smaller prefetch buffer
+            // than for "normal" audio streams.
+            let protocol_info = format!(
+                "http-get:*:{mime}:\
+                 DLNA.ORG_PN=LPCM;\
+                 DLNA.ORG_OP=00;\
+                 DLNA.ORG_CI=0;\
+                 DLNA.ORG_FLAGS=01700000000000000000000000000000"
+            );
+            let didl = format!(
+                "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" \
+                            xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
+                            xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">\
+                   <item id=\"0\" parentID=\"-1\" restricted=\"0\">\
+                     <dc:title>ODJ Master Mix</dc:title>\
+                     <upnp:class>object.item.audioItem.audioBroadcast</upnp:class>\
+                     <res protocolInfo=\"{protocol_info}\">{stream}</res>\
+                   </item>\
+                 </DIDL-Lite>",
+                stream = xml_escape(&stream_url),
+            );
+            let args = format!(
+                "<InstanceID>0</InstanceID>\
+                 <CurrentURI>{}</CurrentURI>\
+                 <CurrentURIMetaData>{}</CurrentURIMetaData>",
+                xml_escape(&stream_url),
+                xml_escape(&didl),
+            );
+            match soap_call(&control_url, "AVTransport", "SetAVTransportURI", &args) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("upnp: SetAVTransportURI failed for {label}: {e}");
+                    return;
+                }
+            }
+            // Play — kick playback. Speed=1 is the only value Naim
+            // accepts (no scrubbing / scan modes).
+            let args = "<InstanceID>0</InstanceID><Speed>1</Speed>";
+            if let Err(e) = soap_call(&control_url, "AVTransport", "Play", args) {
+                eprintln!("upnp: Play failed for {label}: {e}");
+                return;
+            }
+            eprintln!("upnp: playing on {label}");
+        })
+        .expect("spawn upnp play thread");
+}
+
+/// Stop the renderer's current playback. Best-effort.
+pub fn stop(control_url: String, label: String) {
+    std::thread::Builder::new()
+        .name("dj-upnp-stop".into())
+        .spawn(move || {
+            let args = "<InstanceID>0</InstanceID>";
+            if let Err(e) = soap_call(&control_url, "AVTransport", "Stop", args) {
+                eprintln!("upnp: Stop failed for {label}: {e}");
+                return;
+            }
+            eprintln!("upnp: stopped {label}");
+        })
+        .expect("spawn upnp stop thread");
+}
+
+/// Synchronous SOAP POST. Builds the envelope, sends it, reads the
+/// response, returns the body on `2xx`. Errors fold into a single
+/// String so callers can log and move on.
+fn soap_call(
+    control_url: &str,
+    service: &str,
+    action: &str,
+    inner_args: &str,
+) -> Result<String, String> {
+    let (host, port, path) = split_url(control_url)
+        .ok_or_else(|| format!("bad control URL: {control_url}"))?;
+    let body = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+<s:Body>
+<u:{action} xmlns:u="urn:schemas-upnp-org:service:{service}:1">
+{inner_args}
+</u:{action}>
+</s:Body>
+</s:Envelope>
+"#
+    );
+    let soap_action = format!(
+        "\"urn:schemas-upnp-org:service:{service}:1#{action}\""
+    );
+    let req = format!(
+        "POST {path} HTTP/1.0\r\n\
+         Host: {host}:{port}\r\n\
+         Content-Type: text/xml; charset=\"utf-8\"\r\n\
+         SOAPACTION: {soap_action}\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        len = body.len(),
+    );
+    let addr: SocketAddr = format!("{host}:{port}").parse()
+        .map_err(|e| format!("parse address: {e}"))?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+        .map_err(|e| format!("connect: {e}"))?;
+    stream.set_read_timeout(Some(Duration::from_secs(3)))
+        .map_err(|e| format!("set_read_timeout: {e}"))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))
+        .map_err(|e| format!("set_write_timeout: {e}"))?;
+    stream.write_all(req.as_bytes()).map_err(|e| format!("write: {e}"))?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).map_err(|e| format!("read: {e}"))?;
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    // Parse just enough to know if it was 2xx. UPnP errors come back
+    // as 500 with an XML fault body; we log the lot for diagnostics.
+    let status_line = text.lines().next().unwrap_or("");
+    let ok = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .map(|c| (200..300).contains(&c))
+        .unwrap_or(false);
+    if !ok {
+        return Err(format!("non-2xx response: {}", truncate(&text, 2000)));
+    }
+    let body_start = text.find("\r\n\r\n").or_else(|| text.find("\n\n"))
+        .map(|i| i + if text[i..].starts_with("\r\n\r\n") { 4 } else { 2 })
+        .unwrap_or(text.len());
+    Ok(text[body_start..].to_string())
+}
+
+/// Escape just the XML special chars we might smuggle into a SOAP
+/// argument value (URLs in particular can contain `&` for query
+/// parameters). We don't ship anything fancier than a URL through
+/// here, so this short list covers it.
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.len() <= n { s.to_string() } else { format!("{}…", &s[..n]) }
+}
+
 /// Walk the `<serviceList>` looking for an `AVTransport` service and
 /// return its `<controlURL>`. We don't need a full XML parser for
 /// this — device descriptors are well-formed and the relevant block
@@ -395,6 +589,55 @@ mod tests {
                 println!("    AVT: {}", r.av_transport_control);
             }
             None => println!("no response from {url}"),
+        }
+    }
+
+    /// Live SOAP smoke — direct-probe the Lounge, send it
+    /// SetAVTransportURI + Play pointing at a known internet stream,
+    /// wait, then Stop. If it works the Naim plays the BBC Radio 1
+    /// MP3 stream briefly. Validates the SOAP envelope shape /
+    /// SOAPACTION header on real hardware before we wire it into
+    /// the app. Synchronous (calls `soap_call` directly) so we see
+    /// the response inline.
+    ///   cargo test -p ui --lib upnp::tests::live_soap_play -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn live_soap_play() {
+        let ctrl = "http://192.168.68.103:8080/AVTransport/ctrl";
+        let stream = "http://stream.live.vc.bbcmedia.co.uk/bbc_radio_one";
+        let didl = format!(
+            "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" \
+                        xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
+                        xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">\
+               <item id=\"0\" parentID=\"-1\" restricted=\"0\">\
+                 <dc:title>Live SOAP test</dc:title>\
+                 <upnp:class>object.item.audioItem.audioBroadcast</upnp:class>\
+                 <res protocolInfo=\"http-get:*:audio/mpeg:*\">{}</res>\
+               </item>\
+             </DIDL-Lite>",
+            xml_escape(stream),
+        );
+        let set = format!(
+            "<InstanceID>0</InstanceID>\
+             <CurrentURI>{}</CurrentURI>\
+             <CurrentURIMetaData>{}</CurrentURIMetaData>",
+            xml_escape(stream),
+            xml_escape(&didl),
+        );
+        match soap_call(ctrl, "AVTransport", "SetAVTransportURI", &set) {
+            Ok(b) => println!("SetAVTransportURI OK\n{}", truncate(&b, 400)),
+            Err(e) => { println!("SetAVTransportURI ERR: {}", truncate(&e, 2000)); return; }
+        }
+        match soap_call(ctrl, "AVTransport", "Play",
+            "<InstanceID>0</InstanceID><Speed>1</Speed>") {
+            Ok(b) => println!("Play OK\n{}", truncate(&b, 400)),
+            Err(e) => { println!("Play ERR: {e}"); return; }
+        }
+        println!("(playing for 6 s — if the Lounge is on you should hear Radio 1)");
+        std::thread::sleep(Duration::from_secs(6));
+        match soap_call(ctrl, "AVTransport", "Stop", "<InstanceID>0</InstanceID>") {
+            Ok(_) => println!("Stop OK"),
+            Err(e) => println!("Stop ERR: {e}"),
         }
     }
 }
