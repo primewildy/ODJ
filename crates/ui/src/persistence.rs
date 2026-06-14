@@ -620,6 +620,388 @@ fn camelot_number(k: MusicalKey) -> u8 {
     MAJOR[major_tonic as usize]
 }
 
+// =====================================================================
+// Playlists
+// =====================================================================
+//
+// `<music-dir>/.playlists/` is the source of truth. Each playlist is a
+// standard M3U file; directories under .playlists/ are folders in the
+// UI. Mapping the on-disk shape directly to the UI tree means we get
+// "playlists can be in folders" for free (the filesystem already does
+// that), and any other audio tool that speaks M3U can read/write the
+// same files without us inventing a schema.
+//
+// File format (minimal subset of M3U we emit; lenient on read):
+//   #EXTM3U                              <- optional header marker
+//   #EXTINF:duration,Artist - Title      <- optional, we skip on read
+//   /absolute/path/to/track.mp3          <- track entries are kept
+//   (blank lines + other comments dropped)
+//
+// We always write absolute paths so playlists survive being moved
+// around within `.playlists/` (renaming the playlist file doesn't
+// invalidate its entries). The on-disk format never changes between
+// schema versions — M3U is M3U.
+
+/// One node in the playlist tree. Mirrors the on-disk layout under
+/// `.playlists/`: a `Folder` is a directory, a `Playlist` is a `.m3u`
+/// file. The `name` is the user-visible label (file stem for
+/// playlists, directory name for folders).
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // wired into the UI in playlists §2
+pub enum PlaylistNode {
+    Folder {
+        name: String,
+        children: Vec<PlaylistNode>,
+    },
+    Playlist {
+        name: String,
+        /// Absolute path to the `.m3u` file on disk. Used for atomic
+        /// rewrite + as the stable identity when renames happen.
+        file: PathBuf,
+        /// Tracks as absolute paths. The order in the file is the
+        /// order in the UI; playlist editing preserves it.
+        tracks: Vec<PathBuf>,
+    },
+}
+
+#[allow(dead_code)] // wired into the UI in playlists §2
+impl PlaylistNode {
+    pub fn name(&self) -> &str {
+        match self {
+            PlaylistNode::Folder { name, .. } => name,
+            PlaylistNode::Playlist { name, .. } => name,
+        }
+    }
+    pub fn is_folder(&self) -> bool {
+        matches!(self, PlaylistNode::Folder { .. })
+    }
+}
+
+/// In-memory mirror of `<music-dir>/.playlists/`. Loads the full tree
+/// at startup (cheap — playlist trees are small) and rewrites the
+/// relevant `.m3u` on every mutation, atomically (write-temp + rename
+/// to avoid partial-write corruption on crash).
+#[allow(dead_code)] // wired into the UI in playlists §2
+pub struct PlaylistStore {
+    /// Absolute path to `<music-dir>/.playlists/`. Created on first
+    /// mutation if it doesn't exist; load tolerates absence.
+    root: PathBuf,
+    /// Top-level nodes (folders + playlist files directly under root).
+    nodes: Vec<PlaylistNode>,
+    /// Bumps on every successful mutation; the UI uses this to know
+    /// when to refresh its source-rail / track-table snapshot. Same
+    /// trick the analysis cache uses.
+    generation: std::sync::atomic::AtomicU64,
+}
+
+#[allow(dead_code)] // wired into the UI in playlists §2
+impl PlaylistStore {
+    pub fn load(music_dir: &Path) -> Self {
+        let root = music_dir.join(".playlists");
+        let nodes = scan_playlist_dir(&root).unwrap_or_default();
+        Self {
+            root,
+            nodes,
+            generation: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Bumped on every successful mutation. Cheap counter the UI
+    /// snapshots once per frame to know if its cached rendering of
+    /// the tree is stale.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Top-level nodes (root of the tree).
+    pub fn nodes(&self) -> &[PlaylistNode] {
+        &self.nodes
+    }
+
+    /// Children at a given path (a sequence of folder names from the
+    /// root). `None` if the path doesn't resolve to a folder.
+    pub fn children_at(&self, path: &[String]) -> Option<&[PlaylistNode]> {
+        let mut current = &self.nodes;
+        for segment in path {
+            let next = current.iter().find_map(|n| match n {
+                PlaylistNode::Folder { name, children } if name == segment => Some(children),
+                _ => None,
+            })?;
+            current = next;
+        }
+        Some(current)
+    }
+
+    /// Resolve a playlist leaf by its tree path (folders + final
+    /// playlist name). Returns the track list verbatim.
+    pub fn playlist_tracks(&self, path: &[String]) -> Option<&[PathBuf]> {
+        let (last, parents) = path.split_last()?;
+        let siblings = self.children_at(parents)?;
+        siblings.iter().find_map(|n| match n {
+            PlaylistNode::Playlist { name, tracks, .. } if name == last => Some(tracks.as_slice()),
+            _ => None,
+        })
+    }
+
+    /// Flat list of every leaf playlist with its full tree path.
+    /// Used by the track-row "Add to ▸" submenu — we display the
+    /// path joined by `/` so nested playlists are still
+    /// unambiguous.
+    pub fn all_playlists(&self) -> Vec<Vec<String>> {
+        let mut out = Vec::new();
+        fn walk(prefix: &mut Vec<String>, nodes: &[PlaylistNode], out: &mut Vec<Vec<String>>) {
+            for n in nodes {
+                match n {
+                    PlaylistNode::Folder { name, children } => {
+                        prefix.push(name.clone());
+                        walk(prefix, children, out);
+                        prefix.pop();
+                    }
+                    PlaylistNode::Playlist { name, .. } => {
+                        let mut p = prefix.clone();
+                        p.push(name.clone());
+                        out.push(p);
+                    }
+                }
+            }
+        }
+        walk(&mut Vec::new(), &self.nodes, &mut out);
+        out
+    }
+
+    /// Create an empty playlist `<name>.m3u` inside the folder at
+    /// `at`. Returns an error if the name is invalid (contains `/`,
+    /// is empty, etc.) or already exists.
+    pub fn create_playlist(&mut self, at: &[String], name: &str) -> std::io::Result<()> {
+        let name = name.trim();
+        validate_name(name)?;
+        let dir = self.dir_for(at);
+        std::fs::create_dir_all(&dir)?;
+        let file = dir.join(format!("{name}.m3u"));
+        if file.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "playlist already exists",
+            ));
+        }
+        atomic_write(&file, "#EXTM3U\n")?;
+        self.reload();
+        Ok(())
+    }
+
+    /// Create a sub-folder `<name>` inside the folder at `at`.
+    pub fn create_folder(&mut self, at: &[String], name: &str) -> std::io::Result<()> {
+        let name = name.trim();
+        validate_name(name)?;
+        let dir = self.dir_for(at).join(name);
+        if dir.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "folder already exists",
+            ));
+        }
+        std::fs::create_dir_all(&dir)?;
+        self.reload();
+        Ok(())
+    }
+
+    /// Append a track to the playlist at `path`. No-op if the track
+    /// is already in the playlist (we don't want a noisy click to
+    /// duplicate entries — that's almost always not what the user
+    /// meant). De-dup is by exact path equality.
+    pub fn add_track(&mut self, path: &[String], track: &Path) -> std::io::Result<()> {
+        let (last, parents) = path.split_last().ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "empty playlist path",
+        ))?;
+        let dir = self.dir_for(parents);
+        let file = dir.join(format!("{last}.m3u"));
+        let mut tracks = parse_m3u(&file)?;
+        if tracks.iter().any(|p| p == track) {
+            return Ok(());
+        }
+        tracks.push(track.to_path_buf());
+        write_m3u(&file, &tracks)?;
+        self.reload();
+        Ok(())
+    }
+
+    /// Rename a playlist or folder at `path` to `new_name`.
+    pub fn rename(&mut self, path: &[String], new_name: &str) -> std::io::Result<()> {
+        let new_name = new_name.trim();
+        validate_name(new_name)?;
+        let (last, parents) = path.split_last().ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "empty path",
+        ))?;
+        let parent_dir = self.dir_for(parents);
+        // Either name.m3u (playlist) or name (folder) — try both.
+        let playlist_path = parent_dir.join(format!("{last}.m3u"));
+        let folder_path = parent_dir.join(last);
+        if playlist_path.exists() {
+            let dest = parent_dir.join(format!("{new_name}.m3u"));
+            std::fs::rename(&playlist_path, &dest)?;
+        } else if folder_path.exists() {
+            let dest = parent_dir.join(new_name);
+            std::fs::rename(&folder_path, &dest)?;
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not a playlist or folder",
+            ));
+        }
+        self.reload();
+        Ok(())
+    }
+
+    /// Delete a playlist (file) or folder (recursive — caller should
+    /// confirm with the user before calling).
+    pub fn delete(&mut self, path: &[String]) -> std::io::Result<()> {
+        let (last, parents) = path.split_last().ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "empty path",
+        ))?;
+        let parent_dir = self.dir_for(parents);
+        let playlist_path = parent_dir.join(format!("{last}.m3u"));
+        let folder_path = parent_dir.join(last);
+        if playlist_path.exists() {
+            std::fs::remove_file(&playlist_path)?;
+        } else if folder_path.exists() {
+            std::fs::remove_dir_all(&folder_path)?;
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not a playlist or folder",
+            ));
+        }
+        self.reload();
+        Ok(())
+    }
+
+    /// Re-scan the playlist directory from scratch + bump generation.
+    /// Cheap (playlist trees are small). Called after every mutation
+    /// so the in-memory model stays in sync with on-disk reality.
+    fn reload(&mut self) {
+        self.nodes = scan_playlist_dir(&self.root).unwrap_or_default();
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Resolve a tree path to the absolute filesystem directory it
+    /// represents. The empty path resolves to the playlist root.
+    fn dir_for(&self, path: &[String]) -> PathBuf {
+        let mut p = self.root.clone();
+        for seg in path {
+            p.push(seg);
+        }
+        p
+    }
+}
+
+/// Recursive directory scan. Returns sub-folders before playlists in
+/// each directory (matches the typical file-manager convention). Skips
+/// dotfiles and anything not a directory or `.m3u`.
+fn scan_playlist_dir(dir: &Path) -> Option<Vec<PlaylistNode>> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut folders: Vec<PlaylistNode> = Vec::new();
+    let mut playlists: Vec<PlaylistNode> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            let children = scan_playlist_dir(&path).unwrap_or_default();
+            folders.push(PlaylistNode::Folder {
+                name: name.to_string(),
+                children,
+            });
+        } else if path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("m3u")).unwrap_or(false) {
+            let display = path.file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| name.to_string());
+            let tracks = parse_m3u(&path).unwrap_or_default();
+            playlists.push(PlaylistNode::Playlist {
+                name: display,
+                file: path,
+                tracks,
+            });
+        }
+    }
+    folders.sort_by(|a, b| a.name().to_lowercase().cmp(&b.name().to_lowercase()));
+    playlists.sort_by(|a, b| a.name().to_lowercase().cmp(&b.name().to_lowercase()));
+    folders.extend(playlists);
+    Some(folders)
+}
+
+/// Read tracks from an M3U file. Lenient parser — anything starting
+/// with `#` or blank is skipped; remaining lines are taken verbatim
+/// as paths. Doesn't try to validate that the path exists (handled
+/// by the loader when the user actually tries to play it).
+fn parse_m3u(file: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let f = match File::open(file) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut out = Vec::new();
+    for line in BufReader::new(f).lines().map_while(Result::ok) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        out.push(PathBuf::from(trimmed));
+    }
+    Ok(out)
+}
+
+/// Write tracks to an M3U file. Always emits `#EXTM3U` header + one
+/// absolute path per line. Atomic write — go through a `.tmp` and
+/// rename so a kill mid-write can't truncate the playlist.
+fn write_m3u(file: &Path, tracks: &[PathBuf]) -> std::io::Result<()> {
+    let mut body = String::from("#EXTM3U\n");
+    for t in tracks {
+        body.push_str(&t.to_string_lossy());
+        body.push('\n');
+    }
+    atomic_write(file, &body)
+}
+
+/// write-temp + rename atomic file replace. Same pattern the other
+/// stores use (favourites, settings, track-meta).
+fn atomic_write(file: &Path, content: &str) -> std::io::Result<()> {
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = file.with_extension("m3u.tmp");
+    {
+        let mut f = File::create(&tmp)?;
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, file)
+}
+
+/// Reject empty names, names with path-separator characters, names
+/// that would be hidden (start with `.`), or names that resolve
+/// outside the parent directory.
+fn validate_name(name: &str) -> std::io::Result<()> {
+    if name.is_empty()
+        || name.starts_with('.')
+        || name.contains('/')
+        || name.contains('\\')
+        || name == "."
+        || name == ".."
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid name (empty, hidden, or contains a path separator)",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     //! Regression tests for the pure helpers used by the track-table
@@ -791,5 +1173,156 @@ mod tests {
         assert!(m.is_empty());
         m.hot_cues[3] = Some(5.0);
         assert!(!m.is_empty());
+    }
+
+    // ---- PlaylistStore -----------------------------------------------
+
+    /// Minimal tempdir helper — std::env::temp_dir() + a unique
+    /// suffix. No tempfile crate dep needed for our handful of
+    /// tests. Caller is responsible for cleaning up on success;
+    /// on test failure the OS sweeps `/tmp` eventually.
+    fn tempdir(tag: &str) -> PathBuf {
+        // Loose uniqueness — the test runner serialises so a counter
+        // would also work, but stamping the address keeps tests
+        // independent even if parallelism is re-enabled later.
+        let id = std::process::id();
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("odj-playlist-test-{id}-{stamp}-{n}-{tag}"));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn playlists_empty_dir_loads_empty_tree() {
+        let dir = tempdir("empty");
+        let s = PlaylistStore::load(&dir);
+        assert!(s.nodes().is_empty());
+        assert!(s.all_playlists().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn playlists_create_then_load() {
+        let dir = tempdir("create-load");
+        let mut s = PlaylistStore::load(&dir);
+        s.create_playlist(&[], "Warmup").unwrap();
+        s.create_folder(&[], "House").unwrap();
+        s.create_playlist(&["House".into()], "Deep").unwrap();
+
+        // Re-load from disk — verify the tree persisted correctly.
+        let s2 = PlaylistStore::load(&dir);
+        let names: Vec<&str> = s2.nodes().iter().map(|n| n.name()).collect();
+        // Sort puts folders first (House) then playlists (Warmup).
+        assert_eq!(names, vec!["House", "Warmup"]);
+        let house = s2.children_at(&["House".into()]).unwrap();
+        assert_eq!(house.len(), 1);
+        assert_eq!(house[0].name(), "Deep");
+        assert!(matches!(house[0], PlaylistNode::Playlist { .. }));
+
+        // Flat all_playlists includes the nested one.
+        let all = s2.all_playlists();
+        let paths: Vec<Vec<String>> = all.into_iter().collect();
+        assert!(paths.contains(&vec!["House".to_string(), "Deep".to_string()]));
+        assert!(paths.contains(&vec!["Warmup".to_string()]));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn playlists_add_track_persists_and_dedupes() {
+        let dir = tempdir("add-track");
+        let mut s = PlaylistStore::load(&dir);
+        s.create_playlist(&[], "Mix").unwrap();
+        let t1 = PathBuf::from("/music/track-1.mp3");
+        let t2 = PathBuf::from("/music/track-2.mp3");
+        s.add_track(&["Mix".into()], &t1).unwrap();
+        s.add_track(&["Mix".into()], &t2).unwrap();
+        s.add_track(&["Mix".into()], &t1).unwrap(); // dedup
+
+        let s2 = PlaylistStore::load(&dir);
+        let tracks = s2.playlist_tracks(&["Mix".into()]).unwrap();
+        assert_eq!(tracks, &[t1, t2]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn playlists_rename_and_delete() {
+        let dir = tempdir("rename-delete");
+        let mut s = PlaylistStore::load(&dir);
+        s.create_playlist(&[], "Old").unwrap();
+        s.create_folder(&[], "Sets").unwrap();
+
+        s.rename(&["Old".into()], "New").unwrap();
+        s.rename(&["Sets".into()], "Mixes").unwrap();
+
+        let s = PlaylistStore::load(&dir);
+        let names: Vec<&str> = s.nodes().iter().map(|n| n.name()).collect();
+        assert_eq!(names, vec!["Mixes", "New"]);
+
+        let mut s = PlaylistStore::load(&dir);
+        s.delete(&["New".into()]).unwrap();
+        s.delete(&["Mixes".into()]).unwrap();
+
+        let s = PlaylistStore::load(&dir);
+        assert!(s.nodes().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn playlists_lenient_m3u_parser_skips_metadata() {
+        let dir = tempdir("m3u-metadata");
+        let pl_dir = dir.join(".playlists");
+        std::fs::create_dir_all(&pl_dir).unwrap();
+        // Hand-write an M3U with comments + EXTINF (other tools do
+        // this) and verify we only keep the path lines on read.
+        let body = "#EXTM3U\n\
+                    #PLAYLIST:My Set\n\
+                    #EXTINF:240,Artist - Title\n\
+                    /music/track-1.mp3\n\
+                    \n\
+                    #EXTINF:200,Other - Song\n\
+                    /music/track-2.mp3\n";
+        std::fs::write(pl_dir.join("Mix.m3u"), body).unwrap();
+        let s = PlaylistStore::load(&dir);
+        let tracks = s.playlist_tracks(&["Mix".into()]).unwrap();
+        assert_eq!(tracks, &[
+            PathBuf::from("/music/track-1.mp3"),
+            PathBuf::from("/music/track-2.mp3"),
+        ]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn playlists_reject_bad_names() {
+        let dir = tempdir("bad-names");
+        let mut s = PlaylistStore::load(&dir);
+        assert!(s.create_playlist(&[], "").is_err());
+        assert!(s.create_playlist(&[], ".hidden").is_err());
+        assert!(s.create_playlist(&[], "with/slash").is_err());
+        assert!(s.create_playlist(&[], "..").is_err());
+        // Validating happens before we touch the disk, so the store
+        // stays empty after the rejected attempts.
+        assert!(s.nodes().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn playlists_generation_bumps_on_mutation() {
+        let dir = tempdir("generation");
+        let mut s = PlaylistStore::load(&dir);
+        let g0 = s.generation();
+        s.create_playlist(&[], "P").unwrap();
+        assert!(s.generation() > g0);
+        let g1 = s.generation();
+        s.add_track(&["P".into()], Path::new("/x.mp3")).unwrap();
+        assert!(s.generation() > g1);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
