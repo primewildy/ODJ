@@ -611,6 +611,10 @@ pub struct DjApp {
     /// Set when the user clicks a playlist in the source rail;
     /// cleared by selecting any non-playlist source.
     active_playlist: Option<Vec<String>>,
+    /// Modal in flight for playlist editing (new / rename / delete-
+    /// confirm). `None` outside of a dialog. Rendered as a small
+    /// `egui::Window` at the bottom of the frame.
+    pending_playlist_dialog: Option<PlaylistDialog>,
     /// Per-deck: the loaded_path we already logged for the current
     /// LoadTrack. None means "nothing logged for whatever's loaded
     /// now"; a Some(path) acts as a sticky latch — we won't log
@@ -641,6 +645,24 @@ pub struct DjApp {
     /// Edits gated until the user unlocks. Resets to locked on app
     /// start so an accidental tab-click can't mangle a grid.
     grid_edit_unlocked: bool,
+}
+
+/// Modal dialog states for playlist editing. The store API is
+/// synchronous + fallible so the dialog is the natural place to
+/// collect a name / confirm a destructive action before calling
+/// through. Cleared on accept, cancel, or any error (with a stderr
+/// log).
+#[derive(Debug, Clone)]
+enum PlaylistDialog {
+    /// Create a new empty playlist at the given folder path.
+    NewPlaylist { at: Vec<String>, draft: String },
+    /// Create a new folder at the given folder path.
+    NewFolder { at: Vec<String>, draft: String },
+    /// Rename the playlist or folder at `at` to `draft`.
+    Rename { at: Vec<String>, draft: String },
+    /// Confirm-delete prompt. `is_folder` controls the warning
+    /// wording (recursive vs single-file).
+    ConfirmDelete { at: Vec<String>, is_folder: bool },
 }
 
 /// Drill-down state of the left source rail. Most views are "Root +
@@ -864,6 +886,7 @@ impl DjApp {
             track_meta,
             playlists,
             active_playlist: None,
+            pending_playlist_dialog: None,
             deck_logged_path: [None, None],
             browser_tab: BrowserTab::Tracks,
             library_source: LibrarySource::AllTracks,
@@ -1031,7 +1054,7 @@ impl DjApp {
                 src.label(),
                 selected,
                 collapsed,
-            ) {
+            ).clicked() {
                 self.library_source = src;
                 // Any root-level source switch unpins the active
                 // playlist (otherwise it'd still filter the track
@@ -1090,7 +1113,7 @@ impl DjApp {
         let pal = palette::for_ui(ui);
         // Back-out affordance. Empty path → Root; non-empty pops a
         // segment.
-        if source_rail_item(ui, "‹", "Back", false, collapsed) {
+        if source_rail_item(ui, "‹", "Back", false, collapsed).clicked() {
             self.source_rail_view = if path.is_empty() {
                 SourceRailView::Root
             } else {
@@ -1140,7 +1163,10 @@ impl DjApp {
             return;
         }
 
-        // Render folders + playlists.
+        // Render folders + playlists. Each row supports right-click
+        // for rename / delete; the action is deferred into
+        // `pending_playlist_dialog` so the modal can render outside
+        // this borrow.
         for (name, is_folder) in children {
             let icon = if is_folder { "📁" } else { "♫" };
             // Active highlight: a playlist is "selected" when it's
@@ -1153,7 +1179,35 @@ impl DjApp {
                 full.push(name.clone());
                 self.active_playlist.as_ref() == Some(&full)
             };
-            if source_rail_item(ui, icon, &name, selected, collapsed) {
+            let resp = source_rail_item(ui, icon, &name, selected, collapsed);
+
+            // Right-click context menu — rename / delete. Built-in
+            // CloseOnClick is fine since both actions open their own
+            // modal dialog (which sets the menu's intent before any
+            // disk I/O happens).
+            let mut item_path = path.to_vec();
+            item_path.push(name.clone());
+            let item_label = name.clone();
+            let item_is_folder = is_folder;
+            resp.context_menu(|ui| {
+                ui.set_min_width(140.0);
+                if ui.button("Rename…").clicked() {
+                    self.pending_playlist_dialog = Some(PlaylistDialog::Rename {
+                        at: item_path.clone(),
+                        draft: item_label.clone(),
+                    });
+                    ui.close();
+                }
+                if ui.button("Delete…").clicked() {
+                    self.pending_playlist_dialog = Some(PlaylistDialog::ConfirmDelete {
+                        at: item_path.clone(),
+                        is_folder: item_is_folder,
+                    });
+                    ui.close();
+                }
+            });
+
+            if resp.clicked() {
                 if is_folder {
                     // Drill in.
                     let mut next = path.to_vec();
@@ -1172,6 +1226,230 @@ impl DjApp {
                 }
             }
         }
+
+        // "+" button at the bottom of the list — opens "New playlist
+        // / New folder" sub-menu rooted at the current `path`. Right-
+        // click anywhere on a row gives rename/delete; "+ New" is the
+        // discoverable create affordance.
+        ui.add_space(4.0);
+        let plus_label = if collapsed { "+" } else { "+  New…" };
+        let plus_resp = source_rail_item(ui, "+", plus_label, false, collapsed);
+        plus_resp.clone().context_menu(|ui| {
+            ui.set_min_width(160.0);
+            if ui.button("New playlist…").clicked() {
+                self.pending_playlist_dialog = Some(PlaylistDialog::NewPlaylist {
+                    at: path.to_vec(),
+                    draft: String::new(),
+                });
+                ui.close();
+            }
+            if ui.button("New folder…").clicked() {
+                self.pending_playlist_dialog = Some(PlaylistDialog::NewFolder {
+                    at: path.to_vec(),
+                    draft: String::new(),
+                });
+                ui.close();
+            }
+        });
+        // Left-click on the + also opens the New popup. (Without
+        // this it'd only respond to right-click which is confusing.)
+        // Triggering the same context menu programmatically requires
+        // egui's Popup API — simpler: a left-click defaults to "new
+        // playlist" since that's the 95% case. User can right-click
+        // for the folder option.
+        if plus_resp.clicked() {
+            self.pending_playlist_dialog = Some(PlaylistDialog::NewPlaylist {
+                at: path.to_vec(),
+                draft: String::new(),
+            });
+        }
+    }
+
+    /// Modal window for playlist edits (new / rename / confirm-
+    /// delete). Borrows `self.pending_playlist_dialog.take()` for
+    /// the duration of the render so the closure can mutate the
+    /// store; on cancel / completion the dialog is dropped. On
+    /// error we log to stderr and clear the dialog (the user can
+    /// see what went wrong + retry).
+    fn render_playlist_dialog(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = self.pending_playlist_dialog.take() else { return };
+        let mut new_state: Option<PlaylistDialog> = None;
+        let mut close = false;
+
+        match dialog {
+            PlaylistDialog::NewPlaylist { at, mut draft } => {
+                egui::Window::new("New playlist")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label("Name:");
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut draft)
+                                .hint_text("e.g. Warmup")
+                                .desired_width(200.0),
+                        );
+                        resp.request_focus();
+                        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                close = true;
+                            }
+                            let create = ui.button("Create").clicked() || enter;
+                            if create && !draft.trim().is_empty() {
+                                match self.playlists.create_playlist(&at, draft.trim()) {
+                                    Ok(()) => { close = true; }
+                                    Err(e) => {
+                                        eprintln!("playlists: create failed: {e}");
+                                        close = true;
+                                    }
+                                }
+                            }
+                        });
+                    });
+                if !close {
+                    new_state = Some(PlaylistDialog::NewPlaylist { at, draft });
+                }
+            }
+            PlaylistDialog::NewFolder { at, mut draft } => {
+                egui::Window::new("New folder")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label("Name:");
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut draft)
+                                .hint_text("e.g. House")
+                                .desired_width(200.0),
+                        );
+                        resp.request_focus();
+                        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                close = true;
+                            }
+                            let create = ui.button("Create").clicked() || enter;
+                            if create && !draft.trim().is_empty() {
+                                match self.playlists.create_folder(&at, draft.trim()) {
+                                    Ok(()) => { close = true; }
+                                    Err(e) => {
+                                        eprintln!("playlists: create folder failed: {e}");
+                                        close = true;
+                                    }
+                                }
+                            }
+                        });
+                    });
+                if !close {
+                    new_state = Some(PlaylistDialog::NewFolder { at, draft });
+                }
+            }
+            PlaylistDialog::Rename { at, mut draft } => {
+                let original = at.last().cloned().unwrap_or_default();
+                egui::Window::new("Rename")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label(format!("Rename “{original}” to:"));
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut draft)
+                                .desired_width(200.0),
+                        );
+                        resp.request_focus();
+                        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                close = true;
+                            }
+                            let go = ui.button("Rename").clicked() || enter;
+                            if go && !draft.trim().is_empty() && draft.trim() != original {
+                                match self.playlists.rename(&at, draft.trim()) {
+                                    Ok(()) => {
+                                        // If the active playlist
+                                        // was the renamed leaf,
+                                        // update its path so the
+                                        // table doesn't go blank.
+                                        if self.active_playlist.as_ref() == Some(&at) {
+                                            let mut new_path = at.clone();
+                                            *new_path.last_mut().unwrap() = draft.trim().to_string();
+                                            self.active_playlist = Some(new_path);
+                                        }
+                                        close = true;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("playlists: rename failed: {e}");
+                                        close = true;
+                                    }
+                                }
+                            }
+                        });
+                    });
+                if !close {
+                    new_state = Some(PlaylistDialog::Rename { at, draft });
+                }
+            }
+            PlaylistDialog::ConfirmDelete { at, is_folder } => {
+                let label = at.last().cloned().unwrap_or_default();
+                egui::Window::new(if is_folder { "Delete folder?" } else { "Delete playlist?" })
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        if is_folder {
+                            ui.label(format!("Delete folder “{label}” and everything inside it?"));
+                            ui.colored_label(
+                                palette::for_ui(ui).accent_red,
+                                "This can't be undone.",
+                            );
+                        } else {
+                            ui.label(format!("Delete playlist “{label}”?"));
+                        }
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                close = true;
+                            }
+                            if ui.button("Delete").clicked() {
+                                match self.playlists.delete(&at) {
+                                    Ok(()) => {
+                                        // Active playlist sat under
+                                        // the deleted path → unpin.
+                                        if let Some(p) = &self.active_playlist {
+                                            if p.starts_with(&at[..]) || p == &at {
+                                                self.active_playlist = None;
+                                            }
+                                        }
+                                        // Drill-down sat under the
+                                        // deleted folder → pop up.
+                                        if let SourceRailView::PlaylistsAt { path } = &self.source_rail_view {
+                                            if path.starts_with(&at[..]) {
+                                                let mut p = at.clone();
+                                                p.pop();
+                                                self.source_rail_view = SourceRailView::PlaylistsAt { path: p };
+                                            }
+                                        }
+                                        close = true;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("playlists: delete failed: {e}");
+                                        close = true;
+                                    }
+                                }
+                            }
+                        });
+                    });
+                if !close {
+                    new_state = Some(PlaylistDialog::ConfirmDelete { at, is_folder });
+                }
+            }
+        }
+
+        self.pending_playlist_dialog = new_state;
     }
 
     /// Genres drill-down. Derives a sorted unique list of non-empty
@@ -1181,7 +1459,7 @@ impl DjApp {
     /// which the track-table cache already understands.
     fn render_rail_genres(&mut self, ui: &mut egui::Ui, collapsed: bool) {
         let pal = palette::for_ui(ui);
-        if source_rail_item(ui, "‹", "Back", false, collapsed) {
+        if source_rail_item(ui, "‹", "Back", false, collapsed).clicked() {
             self.source_rail_view = SourceRailView::Root;
             return;
         }
@@ -1194,7 +1472,7 @@ impl DjApp {
         // filter without leaving the drill-down. Selected when no
         // genre is currently active.
         let all_selected = self.genre_filter.is_none();
-        if source_rail_item(ui, "≡", "All", all_selected, collapsed) {
+        if source_rail_item(ui, "≡", "All", all_selected, collapsed).clicked() {
             self.genre_filter = None;
         }
 
@@ -1221,7 +1499,7 @@ impl DjApp {
         }
         for g in genres {
             let selected = self.genre_filter.as_deref().map(|s| s.eq_ignore_ascii_case(g)).unwrap_or(false);
-            if source_rail_item(ui, "🏷", g, selected, collapsed) {
+            if source_rail_item(ui, "🏷", g, selected, collapsed).clicked() {
                 self.genre_filter = Some(g.to_string());
             }
         }
@@ -1781,6 +2059,16 @@ impl DjApp {
         let mut new_sort: Option<SortColumn> = None;
         let mut fav_toggle: Option<PathBuf> = None;
         let mut load_action: Option<(PathBuf, DeckId)> = None;
+        // Deferred "add this track to this playlist" action — set by
+        // the right-click submenu on a track row, applied after the
+        // table closure returns so we don't borrow `self.playlists`
+        // mutably from inside the per-row closure.
+        let mut add_to_playlist: Option<(PathBuf, Vec<String>)> = None;
+        // Snapshot the flat playlist list once per frame for the
+        // submenu so the closures don't need to call back into
+        // `self.playlists`. Cheap — small tree, dropped at the end
+        // of the frame.
+        let playlists_snapshot: Vec<Vec<String>> = self.playlists.all_playlists();
 
         let sort = self.sort;
         let tracks = &self.tracks;
@@ -1879,7 +2167,32 @@ impl DjApp {
                         }
                     });
                     row.col(|ui| {
-                        ui.add(egui::Label::new(&meta.title).truncate());
+                        // Title cell senses clicks so we can hang a
+                        // right-click context menu off it — "Add to
+                        // ▸ <playlists>". Left click does nothing
+                        // (Title isn't a "load" target — A/B cells
+                        // own that). Truncate as before.
+                        let title_resp = ui.add(
+                            egui::Label::new(&meta.title)
+                                .truncate()
+                                .sense(egui::Sense::click()),
+                        );
+                        title_resp.context_menu(|ui| {
+                            ui.set_min_width(200.0);
+                            if playlists_snapshot.is_empty() {
+                                ui.weak("(no playlists yet — create one first)");
+                                return;
+                            }
+                            ui.menu_button("Add to ▸", |ui| {
+                                for p in &playlists_snapshot {
+                                    let label = p.join(" / ");
+                                    if ui.button(label).clicked() {
+                                        add_to_playlist = Some((meta.path.clone(), p.clone()));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        });
                     });
                     row.col(|ui| {
                         ui.add(egui::Label::new(&meta.artist).truncate());
@@ -1933,6 +2246,11 @@ impl DjApp {
         }
         if let Some((p, deck)) = load_action {
             self.start_load(p, deck);
+        }
+        if let Some((track_path, pl_path)) = add_to_playlist {
+            if let Err(e) = self.playlists.add_track(&pl_path, &track_path) {
+                eprintln!("playlists: add_track failed: {e}");
+            }
         }
     }
 
@@ -2887,6 +3205,9 @@ impl eframe::App for DjApp {
             self.cancel_auto_mix();
         }
         self.render_settings_window(&ctx);
+        // Playlist editing modal (new / rename / confirm-delete).
+        // Renders after the main panels so it overlays cleanly.
+        self.render_playlist_dialog(&ctx);
         // Reconcile network-output play state at the end of every
         // frame. Cheap when nothing changed (one Vec snapshot from
         // the discovery handle, one Option compare); fires the
@@ -3501,7 +3822,8 @@ fn h_fader(
 /// One row in the left source rail. Custom-painted instead of using
 /// `Button` so the icon column stays a fixed width across different
 /// glyphs (otherwise `≡` and `🕓` push the labels around). Returns
-/// `true` when clicked.
+/// the underlying `Response` so the caller can `.clicked()` for the
+/// left-click action and attach `.context_menu()` for right-click.
 ///
 /// `collapsed = true` strips the label and shrinks the row to icon
 /// width only. Caller is responsible for managing selection state
@@ -3513,7 +3835,7 @@ fn source_rail_item(
     label: &str,
     selected: bool,
     collapsed: bool,
-) -> bool {
+) -> egui::Response {
     let pal = palette::for_ui(ui);
     let item_color = if selected { pal.accent_blue } else { pal.muted };
     let h = 24.0;
@@ -3552,7 +3874,7 @@ fn source_rail_item(
     } else {
         r.clone().on_hover_text(label);
     }
-    r.clicked()
+    r
 }
 
 /// Rounded-pill toggle. Outlined when off (chip bg + faint stroke),
