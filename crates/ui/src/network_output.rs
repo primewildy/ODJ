@@ -187,6 +187,25 @@ fn serve_one(
     stream.write_all(headers.as_bytes())?;
     stream.flush()?;
 
+    // Latency hygiene: drain anything already in the ring before we
+    // start serving. While no client was connected the audio thread
+    // kept pushing into a ring nobody drained — it sat full of up to
+    // ~1 s of stale audio. If we shipped that on the wire first the
+    // Naim would prefetch it (sub-second over LAN) plus its own
+    // safety margin, producing the multi-beat startup latency we
+    // can otherwise never undercut. Empty ring → only realtime data
+    // ever reaches the renderer.
+    let mut dropped = 0usize;
+    while consumer.pop().is_ok() {
+        dropped += 1;
+    }
+    if dropped > 0 {
+        eprintln!(
+            "network-output: dropped {} stale frames on client connect",
+            dropped / channels as usize,
+        );
+    }
+
     // Drain f32s from the audio ring, byte-swap into i16 big-endian
     // PCM, write in modest chunks. Sized to ~10 ms at typical rates
     // — enough to amortise the syscall, small enough that latency
